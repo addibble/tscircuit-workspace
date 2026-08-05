@@ -1,0 +1,694 @@
+{
+  "$comment": "Snapshot of a build environment: every cloned repo's remote/branch/SHA plus the yalc links between them. Reproduce with `./tsc-dev env adopt <owner>`. Regenerate with `./tsc-dev freeze`.",
+  "generatedAt": "2026-08-05T17:36:26.032Z",
+  "tool": {
+    "workspaceCommit": "a139e3a4c55d4dfa4b7fc4b3fb2512318ffd2d79",
+    "bun": "1.3.14",
+    "node": "v26.0.0"
+  },
+  "repos": {
+    "3d-viewer": {
+      "branch": "feat/parametric-enclosures",
+      "sha": "c894d65edec5d2326af2b361e0bbede1cb7121b4",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/3d-viewer",
+      "remotes": {
+        "fork": "https://github.com/addibble/3d-viewer.git",
+        "origin": "https://github.com/tscircuit/3d-viewer"
+      },
+      "dirty": true
+    },
+    "alphabet": {
+      "branch": "main",
+      "sha": "5a0f4ea791bfbf8a505ac4d2f51a7628a36811fe",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/alphabet",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/alphabet"
+      },
+      "dirty": false
+    },
+    "bpc-graph": {
+      "branch": "main",
+      "sha": "d03343054dffe6ea39e2442dac6b5c6e799d96af",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/bpc-graph",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/bpc-graph"
+      },
+      "dirty": false
+    },
+    "breakout-point-solver": {
+      "branch": "main",
+      "sha": "bac96296ccc02be757a72f6254ae2d54d155b362",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/breakout-point-solver",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/breakout-point-solver"
+      },
+      "dirty": false
+    },
+    "bun-match-svg": {
+      "branch": "main",
+      "sha": "2d16c78236661bae48f9569ffa06bd903f355730",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/bun-match-svg",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/bun-match-svg"
+      },
+      "dirty": true
+    },
+    "calculate-cell-boundaries": {
+      "branch": "main",
+      "sha": "a44e1edc42fec857399421f60973a05923a1d969",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/calculate-cell-boundaries",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/calculate-cell-boundaries"
+      },
+      "dirty": false
+    },
+    "calculate-elbow": {
+      "branch": "main",
+      "sha": "404e08ce8412ddc83bbbbbe9771a2f9e3f8d0890",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/calculate-elbow",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/calculate-elbow"
+      },
+      "dirty": false
+    },
+    "calculate-packing": {
+      "branch": "main",
+      "sha": "489d9dd4c32fc9c918ce6b79e02a7cceeec6db41",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/calculate-packing",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/calculate-packing"
+      },
+      "dirty": false
+    },
+    "checks": {
+      "branch": "feat/insertion-direction-canonical-axes",
+      "sha": "ff5222df2c170255e6b90695c68cf1bbab7a0608",
+      "remote": "fork",
+      "remoteUrl": "https://github.com/addibble/checks",
+      "remotes": {
+        "fork": "https://github.com/addibble/checks",
+        "origin": "https://github.com/tscircuit/checks"
+      },
+      "dirty": false
+    },
+    "circuit-json": {
+      "branch": "feat/parametric-enclosures",
+      "sha": "a3058d2951785c21311593920c189fbdb48fec59",
+      "remote": "fork",
+      "remoteUrl": "https://github.com/addibble/circuit-json.git",
+      "remotes": {
+        "fork": "https://github.com/addibble/circuit-json.git",
+        "origin": "https://github.com/tscircuit/circuit-json"
+      },
+      "dirty": false
+    },
+    "circuit-json-to-bpc": {
+      "branch": "main",
+      "sha": "df63f546bf6c0206bb3864cd8282c07d16b97630",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/circuit-json-to-bpc",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/circuit-json-to-bpc"
+      },
+      "dirty": false
+    },
+    "circuit-json-to-connectivity-map": {
+      "branch": "main",
+      "sha": "78e92fd1992243ec4b6ad7aa5e13ee50af1f5938",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/circuit-json-to-connectivity-map",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/circuit-json-to-connectivity-map"
+      },
+      "dirty": false
+    },
+    "circuit-json-to-gltf": {
+      "branch": "feat/parametric-enclosures",
+      "sha": "e1f14efaba361b922f7a3ced80065f5734de3107",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/circuit-json-to-gltf",
+      "remotes": {
+        "fork": "https://github.com/addibble/circuit-json-to-gltf.git",
+        "origin": "https://github.com/tscircuit/circuit-json-to-gltf"
+      },
+      "dirty": true
+    },
+    "circuit-json-to-simple-3d": {
+      "branch": "main",
+      "sha": "3624c360d94262f8cad94b61f15cdc1fb5a96844",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/circuit-json-to-simple-3d",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/circuit-json-to-simple-3d"
+      },
+      "dirty": false
+    },
+    "circuit-json-to-spice": {
+      "branch": "main",
+      "sha": "09e77af33979b8df9dbf3eac53ab3faaac2471f9",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/circuit-json-to-spice",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/circuit-json-to-spice"
+      },
+      "dirty": false
+    },
+    "circuit-json-util": {
+      "branch": "main",
+      "sha": "18e16ca12d3b5eb63f30a5da1689edf48b5087db",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/circuit-json-util",
+      "remotes": {
+        "fork": "https://github.com/addibble/circuit-json-util.git",
+        "origin": "https://github.com/tscircuit/circuit-json-util"
+      },
+      "dirty": false
+    },
+    "circuit-to-svg": {
+      "branch": "main",
+      "sha": "cd9253ce7d1ff114a1587e52c37710446b696ac2",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/circuit-to-svg",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/circuit-to-svg"
+      },
+      "dirty": false
+    },
+    "cli": {
+      "branch": "rfc/parametric-enclosures",
+      "sha": "a2cec1cb929219168342e113bb86ffcae8fd60c6",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/cli",
+      "remotes": {
+        "fork": "https://github.com/addibble/cli.git",
+        "origin": "https://github.com/tscircuit/cli"
+      },
+      "dirty": true
+    },
+    "common": {
+      "branch": "main",
+      "sha": "899e60a92f76d46d8e20940ea1d42ad41fba3ac0",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/common",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/common"
+      },
+      "dirty": false
+    },
+    "connectivity-map": {
+      "branch": "main",
+      "sha": "af4be36fece56c3652d6d68a9c1f48ba96299de5",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/connectivity-map",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/connectivity-map"
+      },
+      "dirty": false
+    },
+    "copper-pour-solver": {
+      "branch": "main",
+      "sha": "20b7a02c88a0b8dc865305778c81492ef7cb5b7a",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/copper-pour-solver",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/copper-pour-solver"
+      },
+      "dirty": false
+    },
+    "core": {
+      "branch": "feat/parametric-enclosures",
+      "sha": "6c0c3914370ba5dc94dbf552906f44db9cc747cd",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/core.git",
+      "remotes": {
+        "fork": "https://github.com/addibble/core.git",
+        "origin": "https://github.com/tscircuit/core.git"
+      },
+      "dirty": true
+    },
+    "create-fdm-enclosure": {
+      "branch": "feat/parametric-enclosures",
+      "sha": "b3536318750cf34180ec38aaa9e8d52039a7f740",
+      "remote": "fork",
+      "remoteUrl": "https://github.com/addibble/create-fdm-enclosure.git",
+      "remotes": {
+        "fork": "https://github.com/addibble/create-fdm-enclosure.git",
+        "origin": "https://github.com/tscircuit/create-fdm-enclosure"
+      },
+      "dirty": true
+    },
+    "docs": {
+      "branch": "main",
+      "sha": "a89b7cb8b554d264569bc913af1559ad2d09505a",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/docs.git",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/docs.git"
+      },
+      "dirty": false
+    },
+    "enclosure": {
+      "branch": "",
+      "sha": "",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/enclosure",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/enclosure"
+      },
+      "dirty": false
+    },
+    "enclosure-skill": {
+      "branch": "main",
+      "sha": "f839dd5ad3944d401f7e4e85eb1bef4c2ba275ee",
+      "remote": "origin",
+      "remoteUrl": "",
+      "remotes": {},
+      "dirty": true
+    },
+    "eval": {
+      "branch": "main",
+      "sha": "f6528f46c69197a36381134ecce1b6b10be62b74",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/eval",
+      "remotes": {
+        "fork": "https://github.com/addibble/eval.git",
+        "origin": "https://github.com/tscircuit/eval",
+        "upstream": "https://github.com/tscircuit/eval.git"
+      },
+      "dirty": true
+    },
+    "footprinter": {
+      "branch": "main",
+      "sha": "ef7f70c123e97df8e8f901b9b578d4fa8de611c9",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/footprinter",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/footprinter"
+      },
+      "dirty": true
+    },
+    "format-si-unit": {
+      "branch": "main",
+      "sha": "e6a457561ee7b06e93b91b54bd16e51dbe984e44",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/format-si-unit",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/format-si-unit"
+      },
+      "dirty": true
+    },
+    "graphics-debug": {
+      "branch": "main",
+      "sha": "1c0db0e2e9bcf8762e3c6b5e90e6ad96cb2d5557",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/graphics-debug",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/graphics-debug"
+      },
+      "dirty": false
+    },
+    "handbook": {
+      "branch": "docs/local-build-versions",
+      "sha": "cd8f6019e8ead2d831323b8ba9b945d87fa9e708",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/handbook.git",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/handbook.git"
+      },
+      "dirty": false
+    },
+    "image-utils": {
+      "branch": "main",
+      "sha": "9b97822a9c319c97e34202069b2573d2dc821bc9",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/image-utils",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/image-utils"
+      },
+      "dirty": false
+    },
+    "infer-cable-insertion-point": {
+      "branch": "fix/release-version-sync",
+      "sha": "4e55d0725153b04a83851d0f0a5b817e359b7c73",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/infer-cable-insertion-point",
+      "remotes": {
+        "fork": "https://github.com/addibble/infer-cable-insertion-point.git",
+        "origin": "https://github.com/tscircuit/infer-cable-insertion-point"
+      },
+      "dirty": false
+    },
+    "jlcpcb-manufacturing-specs": {
+      "branch": "main",
+      "sha": "e08af159db01a37db007e33f0a7268d0e4a279a5",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/jlcpcb-manufacturing-specs",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/jlcpcb-manufacturing-specs"
+      },
+      "dirty": false
+    },
+    "jscad-electronics": {
+      "branch": "fix/connected-right-angle-pinrow",
+      "sha": "dbac8b45b234574c1144df9c1cef667e4715f4eb",
+      "remote": "fork",
+      "remoteUrl": "https://github.com/addibble/jscad-electronics.git",
+      "remotes": {
+        "fork": "https://github.com/addibble/jscad-electronics.git",
+        "origin": "https://github.com/tscircuit/jscad-electronics"
+      },
+      "dirty": false
+    },
+    "jscad-fiber": {
+      "branch": "main",
+      "sha": "02d849d0a6bb1aaabbd614bb8998611fd4e434de",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/jscad-fiber",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/jscad-fiber"
+      },
+      "dirty": false
+    },
+    "jscad-planner": {
+      "branch": "main",
+      "sha": "5bc039d3f6edf3f418751f46050ce52105694f7b",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/jscad-planner",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/jscad-planner"
+      },
+      "dirty": false
+    },
+    "jscad-to-gltf": {
+      "branch": "main",
+      "sha": "b820deacccc68e3fec9e84bd3a58b99884460280",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/jscad-to-gltf",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/jscad-to-gltf"
+      },
+      "dirty": false
+    },
+    "kicad-to-circuit-json": {
+      "branch": "main",
+      "sha": "17b438dd11c7226dcf401ef9596c55daf73c2249",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/kicad-to-circuit-json",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/kicad-to-circuit-json"
+      },
+      "dirty": false
+    },
+    "kicadts": {
+      "branch": "main",
+      "sha": "c48d488029937112c376223ca34ebd9e03ba765b",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/kicadts",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/kicadts"
+      },
+      "dirty": false
+    },
+    "krt-wasm": {
+      "branch": "main",
+      "sha": "cd98af7b6e1306159e8587c233acbb5758f59ebf",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/krt-wasm",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/krt-wasm"
+      },
+      "dirty": true
+    },
+    "matchpack": {
+      "branch": "main",
+      "sha": "02c0b81399055bbe552379c0c41c272284d1bb06",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/matchpack",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/matchpack"
+      },
+      "dirty": false
+    },
+    "math-utils": {
+      "branch": "main",
+      "sha": "cadf0e53fdd66c38c7f32c26b74bf071b9f7b950",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/math-utils",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/math-utils"
+      },
+      "dirty": false
+    },
+    "minicssgrid": {
+      "branch": "main",
+      "sha": "0fd5653aed1251f8e40acf1a6017f4482514340a",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/minicssgrid",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/minicssgrid"
+      },
+      "dirty": false
+    },
+    "miniflex": {
+      "branch": "main",
+      "sha": "70df51aa5e939b0340a0f5aab16ff9548b1364a8",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/miniflex",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/miniflex"
+      },
+      "dirty": true
+    },
+    "ngspice-spice-engine": {
+      "branch": "main",
+      "sha": "0b381c1388d4763102bf765f6615f7539d8625ec",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/ngspice-spice-engine",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/ngspice-spice-engine"
+      },
+      "dirty": true
+    },
+    "pcb-enclosure": {
+      "branch": "main",
+      "sha": "915c64a7b3af43798d3b48fc357f93c57af06c1e",
+      "remote": "fork",
+      "remoteUrl": "https://github.com/addibble/pcb-enclosure.git",
+      "remotes": {
+        "fork": "https://github.com/addibble/pcb-enclosure.git"
+      },
+      "dirty": true
+    },
+    "pcb-enclosure.bak": {
+      "branch": "main",
+      "sha": "599af1bd897cde16b4dd50e984ce24a57f0c03cc",
+      "remote": "origin",
+      "remoteUrl": "",
+      "remotes": {},
+      "dirty": true
+    },
+    "pcb-enclosure.bak2": {
+      "branch": "main",
+      "sha": "8547c4352f443739847bfa878e8c064a1ed598bf",
+      "remote": "origin",
+      "remoteUrl": "",
+      "remotes": {},
+      "dirty": true
+    },
+    "poppygl": {
+      "branch": "main",
+      "sha": "c55073249cb02db8ef87cac941726c634240f4af",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/poppygl",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/poppygl"
+      },
+      "dirty": false
+    },
+    "props": {
+      "branch": "feat/parametric-enclosures",
+      "sha": "1c153ad0cfb5decf1a814e225c6f08b623a1eddf",
+      "remote": "fork",
+      "remoteUrl": "https://github.com/addibble/props.git",
+      "remotes": {
+        "fork": "https://github.com/addibble/props.git",
+        "origin": "https://github.com/tscircuit/props"
+      },
+      "dirty": true
+    },
+    "rfc": {
+      "branch": "feat/parametric-enclosures",
+      "sha": "8a855af6955495e751792f80684dfc2eeea5bf40",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/rfc.git",
+      "remotes": {
+        "fork": "https://github.com/addibble/rfc.git",
+        "origin": "https://github.com/tscircuit/rfc.git"
+      },
+      "dirty": true
+    },
+    "runframe": {
+      "branch": "main",
+      "sha": "6b07f5d51562fe389d2a727e3f6091c39eb7a181",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/runframe",
+      "remotes": {
+        "fork": "https://github.com/addibble/runframe.git",
+        "origin": "https://github.com/tscircuit/runframe"
+      },
+      "dirty": true
+    },
+    "schematic-symbols": {
+      "branch": "main",
+      "sha": "09af08ae97bf2edbc1d2f0d75fce67d2c4c977a0",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/schematic-symbols",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/schematic-symbols"
+      },
+      "dirty": false
+    },
+    "schematic-trace-solver": {
+      "branch": "main",
+      "sha": "0bb371b26f1dca711da5dc7995f7aff85ff75511",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/schematic-trace-solver",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/schematic-trace-solver"
+      },
+      "dirty": false
+    },
+    "skill": {
+      "branch": "feat/enclosure-elements",
+      "sha": "4fefcab5b7beb273c8b7e25a730cd68d14e1ac90",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/skill",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/skill"
+      },
+      "dirty": false
+    },
+    "solver-utils": {
+      "branch": "main",
+      "sha": "91da732bd3e7a716c067779380a6266a3a6fd634",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/solver-utils",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/solver-utils"
+      },
+      "dirty": true
+    },
+    "spicets": {
+      "branch": "main",
+      "sha": "d56b61fb26d839a56203c8585e8db6e58e1636ba",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/spicets",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/spicets"
+      },
+      "dirty": false
+    },
+    "spicey": {
+      "branch": "main",
+      "sha": "5c9e7419006893583105ccf1b5648749012f8368",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/spicey",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/spicey"
+      },
+      "dirty": true
+    },
+    "stack-svgs": {
+      "branch": "main",
+      "sha": "f61632228b4741c45227940c285ad6aca3c765cd",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/stack-svgs",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/stack-svgs"
+      },
+      "dirty": false
+    },
+    "tscircuit": {
+      "branch": "chore/bump-props-0.0.606",
+      "sha": "234fc03a202f3dbbb1390f216e140e6cb993536d",
+      "remote": "origin",
+      "remoteUrl": "https://github.com/tscircuit/tscircuit",
+      "remotes": {
+        "origin": "https://github.com/tscircuit/tscircuit"
+      },
+      "dirty": true
+    }
+  },
+  "links": {
+    "3d-viewer": [
+      "@tscircuit/circuit-json-util",
+      "@tscircuit/core",
+      "@tscircuit/create-fdm-enclosure",
+      "circuit-json",
+      "tscircuit"
+    ],
+    "circuit-json-to-gltf": [
+      "@tscircuit/circuit-json-util",
+      "circuit-json",
+      "tscircuit"
+    ],
+    "cli": [
+      "@tscircuit/eval",
+      "@tscircuit/props",
+      "@tscircuit/runframe",
+      "circuit-json",
+      "circuit-json-to-gltf",
+      "tscircuit"
+    ],
+    "core": [
+      "@tscircuit/checks",
+      "@tscircuit/circuit-json-util",
+      "@tscircuit/create-fdm-enclosure",
+      "@tscircuit/infer-cable-insertion-point",
+      "@tscircuit/props",
+      "circuit-json",
+      "circuit-json-to-gltf"
+    ],
+    "create-fdm-enclosure": [
+      "circuit-json-to-gltf"
+    ],
+    "eval": [
+      "@tscircuit/checks",
+      "@tscircuit/circuit-json-util",
+      "@tscircuit/core",
+      "@tscircuit/create-fdm-enclosure",
+      "@tscircuit/infer-cable-insertion-point",
+      "@tscircuit/props",
+      "circuit-json",
+      "circuit-json-to-gltf"
+    ],
+    "runframe": [
+      "@tscircuit/3d-viewer",
+      "@tscircuit/core",
+      "@tscircuit/create-fdm-enclosure",
+      "@tscircuit/eval",
+      "@tscircuit/props",
+      "circuit-json",
+      "tscircuit"
+    ],
+    "tscircuit": [
+      "@tscircuit/circuit-json-util",
+      "@tscircuit/cli",
+      "@tscircuit/core",
+      "@tscircuit/create-fdm-enclosure",
+      "@tscircuit/eval",
+      "@tscircuit/props",
+      "@tscircuit/runframe",
+      "circuit-json",
+      "circuit-json-to-gltf"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$comment": "Your personal workspace layer. Deep-merged over workspace.json, and it wins. Versioned on an orphan branch pushed only to your fork — never to the shared repo's main. Put anything here whose value differs between developers.",
+  "defaultForkEffort": "parametric-enclosures",
+  "forkEfforts": {
+    "parametric-enclosures": {
+      "description": "Repos carrying the parametric-enclosure patch set, in release order (see create-fdm-enclosure/README.md). Downstream rebuild-only repos (eval, runframe, cli) are excluded — they carry no patch branch. Override the effort with SYNC_FORK_EFFORT, or one branch for every repo with SYNC_FORK_BRANCH.",
+      "defaultBranch": "feat/parametric-enclosures",
+      "branchOverrides": {
+        "infer-cable-insertion-point": "fix/explicit-insertion-direction"
+      },
+      "repos": [
+        "circuit-json",
+        "props",
+        "create-fdm-enclosure",
+        "circuit-json-to-gltf",
+        "infer-cable-insertion-point",
+        "3d-viewer",
+        "core",
+        "rfc"
+      ]
+    }
+  }
+}
