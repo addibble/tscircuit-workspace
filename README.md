@@ -19,6 +19,11 @@ See the official guides:
 
 ## The `tsc-dev` helper
 
+`workspace.json` holds the shared configuration — the curated clone groups, the
+build-time **bundling graph** that `rebuild --from` walks, and the fork/patch-set
+efforts `sync-forks` updates. Add a group, a bundling edge or an effort there
+rather than editing the script; `MAP.md` is its prose companion.
+
 `./tsc-dev` automates clone + build + yalc-linking. Run `./tsc-dev help` for all
 commands. Common ones:
 
@@ -140,7 +145,8 @@ Clone the chain you need, install, then rebuild bottom-up and run the CLI from s
 ./tsc-dev install core eval runframe cli
 
 # After editing core (or props/circuit-json), propagate up the chain:
-./tsc-dev rebuild core eval runframe cli
+./tsc-dev rebuild --from core          # chain computed from workspace.json
+./tsc-dev rebuild core eval runframe cli   # or spell it out
 
 # Run the dev server from source against your circuit file:
 ./tsc-dev dev ../my-project/index.circuit.tsx
@@ -148,7 +154,23 @@ Clone the chain you need, install, then rebuild bottom-up and run the CLI from s
 
 `rebuild` auto-links any dependency that is also cloned in this workspace, builds
 each repo, and `yalc push`es it before moving to the next — so the change is
-re-inlined at every level. **Only rebuild what's below your change:**
+re-inlined at every level. **Only rebuild what's below your change** — which is
+what `--from` computes for you, from the `bundling.inlines` graph in
+`workspace.json`:
+
+```bash
+./tsc-dev rebuild --from core --dry-run
+▶ chain from core: core eval runframe cli tscircuit
+
+./tsc-dev rebuild --from circuit-json --to cli --dry-run
+▶ chain from circuit-json: circuit-json core eval 3d-viewer runframe cli
+```
+
+The graph is advisory and deliberately a superset of literal inlining — one
+level too many is harmless, one level too few silently ships a stale bundle —
+but every edge is verified against the consumer's real `package.json` before use,
+so an edge a given branch doesn't actually have is dropped rather than costing a
+rebuild. Uncloned repos are skipped. The explicit equivalents:
 
 | You changed... | Rebuild chain |
 |---|---|

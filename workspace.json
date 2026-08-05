@@ -1,0 +1,78 @@
+{
+  "$comment": "Shared configuration for the tscircuit workspace. Read by ./tsc-dev; this is the single source of truth for what MAP.md documents in prose. Plain JSON (not JSONC) so `node -e` can read it with no dependency; explanatory text lives in `description` fields, which the tooling prints, rather than in comments nothing can see.",
+
+  "defaultRepos": [
+    "core",
+    "eval",
+    "runframe",
+    "cli",
+    "tscircuit",
+    "props",
+    "circuit-json",
+    "footprinter"
+  ],
+
+  "groups": {
+    "runtime": {
+      "description": "The packages that turn React/TSX into a rendered board — the 'system'. See `bundling` below before rebuilding any of these.",
+      "repos": ["core", "eval", "runframe", "cli", "tscircuit", "props", "circuit-json"]
+    },
+    "viewers": {
+      "description": "React components / libs that render Circuit JSON.",
+      "repos": ["pcb-viewer", "schematic-viewer", "3d-viewer", "assembly-viewer", "runframe", "circuit-to-svg", "circuit-to-canvas"]
+    },
+    "exporters": {
+      "description": "Circuit JSON to manufacturing / interchange formats.",
+      "repos": ["circuit-json-to-gerber", "circuit-json-to-kicad", "circuit-json-to-step", "circuit-json-to-spice", "circuit-json-to-gltf", "circuit-json-to-bom-csv", "circuit-json-to-pnp-csv"]
+    },
+    "autorouting": {
+      "description": "Trace routing: the main MIT autorouter plus the solvers it is built from.",
+      "repos": ["tscircuit-autorouter", "capacity-autorouter", "infgrid-ijump-astar", "bus-router", "high-density-a01", "schematic-trace-solver", "freerouting-cli", "dsn-converter"]
+    },
+    "solvers": {
+      "description": "Standalone 2D algorithms, each with its own Cosmos debugger (`bun run start`).",
+      "repos": ["matchpack", "calculate-packing", "copper-pour-solver", "breakout-point-solver", "schematic-match-adapt", "solver-utils", "miniflex", "minicssgrid", "bpc-graph"]
+    },
+    "formats": {
+      "description": "The data format and the parsers/DSLs around it.",
+      "repos": ["circuit-json", "props", "footprinter", "schematic-symbols", "kicadts", "dsnts", "gerberts", "stepts", "circuit-json-util"]
+    },
+    "importers": {
+      "description": "Foreign formats into Circuit JSON / tscircuit source.",
+      "repos": ["easyeda-converter", "kicad-to-circuit-json", "kicad-converter", "svg-to-tscircuit", "circuit-json-to-tscircuit"]
+    }
+  },
+
+  "bundling": {
+    "description": "Which packages are baked into which other packages at BUILD time. tscircuit packages are inlined, not resolved from node_modules at runtime: core/props/circuit-json are bundled into eval's webworker, that worker is base64-embedded into runframe's standalone.min.js, and the cli serves that bundle. So a change is invisible downstream until every level below it is rebuilt, bottom-up — `./tsc-dev rebuild --from <repo>` computes that order from this graph. Read each entry as 'consumer: packages baked into it'. The graph is advisory and deliberately a superset of literal inlining (rebuilding one level too many is harmless; one level too few silently ships a stale bundle) — edges are verified against the consumer's real package.json at run time, and edges to repos you have not cloned are skipped.",
+    "inlines": {
+      "core": ["circuit-json", "props", "checks", "circuit-json-util", "footprinter", "circuit-json-to-gltf", "create-fdm-enclosure", "infer-cable-insertion-point"],
+      "3d-viewer": ["circuit-json", "circuit-json-util"],
+      "eval": ["core", "props", "circuit-json", "circuit-json-to-gltf"],
+      "runframe": ["eval", "3d-viewer", "pcb-viewer", "schematic-viewer", "circuit-to-svg", "circuit-json-to-gerber", "circuit-json-to-kicad"],
+      "cli": ["runframe", "eval", "circuit-json-to-gltf"],
+      "tscircuit": ["cli", "runframe", "eval", "core"]
+    }
+  },
+
+  "defaultForkEffort": "parametric-enclosures",
+  "forkEfforts": {
+    "parametric-enclosures": {
+      "description": "Repos carrying the parametric-enclosure patch set, in release order (see create-fdm-enclosure/README.md). Downstream rebuild-only repos (eval, runframe, cli) are excluded — they carry no patch branch. Override the effort with SYNC_FORK_EFFORT, or one branch for every repo with SYNC_FORK_BRANCH.",
+      "defaultBranch": "feat/parametric-enclosures",
+      "branchOverrides": {
+        "infer-cable-insertion-point": "fix/explicit-insertion-direction"
+      },
+      "repos": [
+        "circuit-json",
+        "props",
+        "create-fdm-enclosure",
+        "circuit-json-to-gltf",
+        "infer-cable-insertion-point",
+        "3d-viewer",
+        "core",
+        "rfc"
+      ]
+    }
+  }
+}

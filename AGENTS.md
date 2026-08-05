@@ -42,6 +42,7 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `link <consumer> <dep>` | `yalc add` the dep's package into the consumer |
 | `push <repo>` | rebuild + `yalc push` to all consumers |
 | `rebuild <repo...>` | link local deps + build + push, **in order** (propagate a change up the chain) |
+| `rebuild --from <repo>` | same, but the chain is **computed** from `workspace.json`'s bundling graph |
 | `doctor [target...]` | audit yalc links (unstamped versions, npm copies that overwrote a link, stale links) |
 | `prune-store [--keep N]` | delete old `-local.*` builds from the yalc store |
 | `pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
@@ -52,6 +53,9 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 
 ## Repo layout & discovery
 
+- **`workspace.json` is the shared config** — clone groups, the build-time
+  bundling graph, and the fork/patch-set efforts. Add a group or a bundling edge
+  there, not in `tsc-dev`. `MAP.md` is the prose companion for humans.
 - The org has ~300 active repos. **Clone deliberately** — see `MAP.md` for the
   ~80 that matter, grouped by function.
 - `.tscircuit-repos.txt` caches active org repo names (used to validate
@@ -202,8 +206,20 @@ cli dev server  serves runframe's standalone + runs eval's worker
 
 Therefore a `core` change does **not** appear just by `yalc add`-ing core into
 the CLI — it's frozen inside eval's prebuilt bundle. To see it end-to-end you
-must rebuild **bottom-up** so it gets re-inlined at each level. Rebuild only
-what's below your change:
+must rebuild **bottom-up** so it gets re-inlined at each level.
+
+**Let the chain be computed** rather than remembering it — `workspace.json`
+carries the bundling graph, and `--from` walks it:
+
+```bash
+./tsc-dev rebuild --from core --dry-run     # ▶ chain from core: core eval runframe cli tscircuit
+./tsc-dev rebuild --from circuit-json --to cli
+```
+
+Edges are verified against each consumer's real `package.json`, so a declared
+edge that a given branch doesn't actually have is dropped instead of causing a
+pointless rebuild, and repos you haven't cloned are skipped. The equivalent
+explicit forms:
 
 | Changed | Rebuild chain |
 |---|---|

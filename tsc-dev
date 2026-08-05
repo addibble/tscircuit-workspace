@@ -11,6 +11,10 @@
 # All repos are cloned as flat siblings inside this directory (the workspace
 # root), e.g. ~/src/tscircuit/core, ~/src/tscircuit/props, ...
 #
+# workspace.json is the shared config: the curated clone groups, the build-time
+# bundling graph that `rebuild --from` walks, and the fork/patch-set efforts that
+# `sync-forks` updates. Change configuration there, not in this script.
+#
 # Usage:
 #   ./tsc-dev clone [repo ...]        Clone repos from the tscircuit org (default set if none given)
 #   ./tsc-dev clone-deps <repo> [-r]  Clone the tscircuit-org repos <repo> depends on (its dependency
@@ -50,8 +54,11 @@
 #                                     Use this to propagate a change up the bundling chain. Because
 #                                     core/props/circuit-json are INLINED into eval's webworker, which
 #                                     is INLINED into runframe's standalone bundle, you must rebuild
-#                                     bottom-up. Canonical full chain for a core change:
-#                                         ./tsc-dev rebuild core eval runframe cli
+#                                     bottom-up. Prefer letting the chain be computed:
+#                                         ./tsc-dev rebuild --from core [--to cli] [--dry-run]
+#                                     which reads workspace.json's bundling graph, keeps only edges
+#                                     the consumers' package.json really have, and sorts them so every
+#                                     package is built after everything it inlines.
 #   ./tsc-dev dev [file] [--local]   Run the CLI dev server FROM SOURCE on a circuit project.
 #                                     Pass a project dir or file (e.g. ../tscircuit-local). With
 #                                     --local it serves YOUR locally-built runframe standalone
@@ -102,25 +109,30 @@ set -euo pipefail
 ORG="https://github.com/tscircuit"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_CACHE="$ROOT/.tscircuit-repos.txt"  # active org repo names, one per line
+MANIFEST="$ROOT/workspace.json"          # shared config: groups, bundling graph, fork efforts
 
-# Curated categories for `clone-group`. Pick the area you want to explore.
-group_repos() {
-  case "$1" in
-    runtime)   echo "core eval runframe cli tscircuit props circuit-json" ;;
-    viewers)   echo "pcb-viewer schematic-viewer 3d-viewer assembly-viewer runframe circuit-to-svg circuit-to-canvas" ;;
-    exporters) echo "circuit-json-to-gerber circuit-json-to-kicad circuit-json-to-step circuit-json-to-spice circuit-json-to-gltf circuit-json-to-bom-csv circuit-json-to-pnp-csv" ;;
-    autorouting) echo "tscircuit-autorouter capacity-autorouter infgrid-ijump-astar bus-router high-density-a01 schematic-trace-solver freerouting-cli dsn-converter" ;;
-    solvers)   echo "matchpack calculate-packing copper-pour-solver breakout-point-solver schematic-match-adapt solver-utils miniflex minicssgrid bpc-graph" ;;
-    formats)   echo "circuit-json props footprinter schematic-symbols kicadts dsnts gerberts stepts circuit-json-util" ;;
-    importers) echo "easyeda-converter kicad-to-circuit-json kicad-converter svg-to-tscircuit circuit-json-to-tscircuit" ;;
-    *) return 1 ;;
-  esac
+# Evaluate a JS expression against the manifest with `w` bound to it. Arrays
+# print one element per line so callers can read them with `while read`.
+ws() {
+  [ -f "$MANIFEST" ] || die "missing $MANIFEST"
+  local expr="$1"; shift
+  node -e 'const w=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));let o;try{o=eval(process.argv[2])}catch(e){process.stderr.write(String(e)+"\n");process.exit(3)}if(o==null)process.exit(0);process.stdout.write(Array.isArray(o)?o.join("\n"):String(o))' "$MANIFEST" "$expr" "$@"
 }
 
-# A convenient default set for clone. Add more as you need them — any repo name
-# under github.com/tscircuit works with `clone`. These are the repos that make up
-# the runtime rendering chain (core -> eval -> runframe -> cli) plus common leaves.
-DEFAULT_REPOS=(core eval runframe cli tscircuit props circuit-json footprinter)
+# Curated categories for `clone-group`, from workspace.json.
+group_repos() {
+  local repos; repos="$(ws "(w.groups[process.argv[3]]||{}).repos" "$1" 2>/dev/null | tr '\n' ' ')"
+  [ -n "${repos// /}" ] || return 1
+  echo "$repos"
+}
+
+# The bottom-up rebuild order for a change in <from> (see bin/rebuild-chain.mjs).
+rebuild_chain() {
+  node "$ROOT/bin/rebuild-chain.mjs" "$MANIFEST" "$ROOT" "$1" ${2:+"$2"}
+}
+
+# The default set for `clone`: the runtime rendering chain plus common leaves.
+default_repos() { ws "w.defaultRepos"; }
 
 # Find the cloned repo dir that publishes a given npm package name (empty if none).
 repo_for_pkg() {
@@ -228,7 +240,10 @@ yalc_installations() {
 }
 
 cmd_clone() {
-  local repos=("$@"); [ ${#repos[@]} -eq 0 ] && repos=("${DEFAULT_REPOS[@]}")
+  local repos=("$@")
+  if [ ${#repos[@]} -eq 0 ]; then
+    while IFS= read -r r; do [ -n "$r" ] && repos+=("$r"); done < <(default_repos)
+  fi
   for r in "${repos[@]}"; do
     if have "$r"; then echo "✓ $r already cloned"; continue; fi
     echo "▶ cloning $r"
@@ -245,7 +260,13 @@ is_org_repo() {
 cmd_clone_group() {
   local g="${1:-}"
   if [ -z "$g" ]; then
-    echo "available groups: runtime viewers exporters autorouting solvers formats importers"
+    echo "available groups (from workspace.json):"
+    local name
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      printf '  %-12s %s\n' "$name" "$(ws "w.groups[process.argv[3]].description" "$name")"
+      printf '  %-12s   %s\n' "" "$(ws "w.groups[process.argv[3]].repos.join(' ')" "$name")"
+    done < <(ws "Object.keys(w.groups)")
     echo "usage: ./tsc-dev clone-group <group>"; return 0
   fi
   local repos; repos="$(group_repos "$g")" || die "unknown group '$g' (run ./tsc-dev clone-group)"
@@ -368,9 +389,30 @@ cmd_unlink() {
 }
 
 cmd_rebuild() {
-  [ $# -ge 1 ] || die "usage: rebuild <repo> [repo ...]   (list bottom-up, e.g. core eval runframe cli)"
+  local from="" to="" dry=0 repos=() r
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) from="${2:?--from needs a repo}"; shift 2 ;;
+      --to) to="${2:?--to needs a repo}"; shift 2 ;;
+      --dry-run|-n) dry=1; shift ;;
+      -*) die "unknown flag '$1'" ;;
+      *) repos+=("$1"); shift ;;
+    esac
+  done
+  if [ -n "$from" ]; then
+    [ ${#repos[@]} -eq 0 ] || die "--from and an explicit repo list are mutually exclusive"
+    have "$from" || die "repo '$from' is not cloned"
+    while IFS= read -r r; do [ -n "$r" ] && repos+=("$r"); done < <(rebuild_chain "$from" "$to")
+    [ ${#repos[@]} -gt 0 ] || die "no rebuild chain from '$from' (is it in workspace.json's bundling graph?)"
+    echo "▶ chain from $from: ${repos[*]}"
+  fi
+  [ ${#repos[@]} -ge 1 ] || die "usage: rebuild <repo> [repo ...] | rebuild --from <repo> [--to <repo>] [--dry-run]"
+  if [ "$dry" = 1 ]; then
+    printf '%s\n' "(dry run) would rebuild in order: ${repos[*]}"
+    return 0
+  fi
   local repo dep name
-  for repo in "$@"; do
+  for repo in "${repos[@]}"; do
     have "$repo" || die "repo '$repo' is not cloned"
     echo "=== rebuilding $repo ($(pkgname "$repo")) ==="
     # Link any dependency that is also a cloned repo in this workspace.
@@ -387,7 +429,7 @@ cmd_rebuild() {
     # package.json from a backup, which would otherwise revert those links.
     with_dev_version "$repo" do_rebuild_one "$repo"
   done
-  echo "✓ rebuilt: $*"
+  echo "✓ rebuilt: ${repos[*]}"
 }
 
 do_rebuild_one() {
@@ -808,28 +850,15 @@ cmd_pr_rm() {
   fi
 }
 
-# The forks that carry the parametric-enclosure work, in release order (see
-# `create-fdm-enclosure/README.md`). Downstream rebuild-only repos (eval,
-# runframe, cli) and unrelated forks (circuit-json-util, exec) are deliberately
-# excluded — they carry no patch branch for this effort.
-SYNC_FORK_REPOS=(
-  circuit-json
-  props
-  create-fdm-enclosure
-  circuit-json-to-gltf
-  infer-cable-insertion-point
-  3d-viewer
-  core
-  rfc
-)
+# The repos carrying the active patch-set effort, and each one's branch — both
+# from workspace.json, so a second effort is a config change, not a code change.
+# Pick a different effort with SYNC_FORK_EFFORT.
+sync_fork_repos() {
+  ws "w.forkEfforts[process.env.SYNC_FORK_EFFORT||w.defaultForkEffort].repos"
+}
 
-# Patch branch per repo; anything unlisted uses SYNC_FORK_DEFAULT_BRANCH.
-SYNC_FORK_DEFAULT_BRANCH="feat/parametric-enclosures"
 sync_fork_branch_for() {
-  case "$1" in
-    infer-cable-insertion-point) echo "fix/explicit-insertion-direction" ;;
-    *) echo "$SYNC_FORK_DEFAULT_BRANCH" ;;
-  esac
+  ws "(e=>e.branchOverrides?.[process.argv[3]]||e.defaultBranch)(w.forkEfforts[process.env.SYNC_FORK_EFFORT||w.defaultForkEffort])" "$1"
 }
 
 # After a successful fork rebase+push, move the local branch onto the rewritten
@@ -894,7 +923,7 @@ fast_forward_local_main() {
 # Set SYNC_FORK_BRANCH to force one branch name for every repo.
 cmd_sync_forks() {
   command -v gh >/dev/null 2>&1 || die "sync-forks needs the GitHub CLI (gh)"
-  local repos=("$@"); [ ${#repos[@]} -eq 0 ] && repos=("${SYNC_FORK_REPOS[@]}")
+  local repos=("$@"); [ ${#repos[@]} -eq 0 ] && { repos=(); while IFS= read -r t; do [ -n "$t" ] && repos+=("$t"); done < <(sync_fork_repos); }
   local repo dir fork_url fork_slug out branch branch_ref sync_root sync_dir conflict_files
   local local_ref fork_ref branch_src diverged new_head fork_fetch_ok
   for repo in "${repos[@]}"; do

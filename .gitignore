@@ -16,6 +16,7 @@
 !/AGENTS.md
 !/MAP.md
 !/tsc-dev
+!/workspace.json
 !/bin/
 
 # Machine-local state, regenerable — never shared:
