@@ -47,6 +47,8 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `prune-store [--keep N]` | delete old `-local.*` builds from the yalc store |
 | `pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
 | `pr-check <repo> <branch>` | run the PR gates CI runs, derived from that repo's workflows |
+| `pr-push <repo> <branch>` | push to your fork (or origin) and open the PR |
+| `fork <repo...>` | create your fork and wire it up as the `fork` remote |
 | `dev [file]` | run the CLI dev server **from source** |
 | `unlink <consumer>` | `yalc remove --all` + `bun install` (restore npm versions) |
 | `status` | list cloned repos, package names, active yalc links |
@@ -150,8 +152,16 @@ environment. Give it its own worktree off upstream `main`:
 ./tsc-dev pr <repo> <branch> --pick <sha>       # a fix already committed on the feature branch
 ./tsc-dev pr <repo> <branch> --take <path>      # a fix that only exists in the working tree
 ./tsc-dev pr-check <repo> <branch>              # exactly the gates CI runs on a PR
+./tsc-dev pr-push <repo> <branch>               # push to your fork (or origin) + open the PR
 ./tsc-dev pr-rm <repo> <branch> --delete-branch
 ```
+
+Remote convention, identical for every developer: **`origin` is always
+`tscircuit/<repo>`** (upstream) and **`fork` is your own** — set up with
+`./tsc-dev fork <repo...>`, or skipped entirely if you have push access, in which
+case branches go to origin. Never hardcode a username, absolute path or other
+machine-specific state in a tracked workspace file; per-developer facts belong in
+git remotes/config.
 
 The worktree has its own checkout, its own `node_modules`, and (by construction,
 since its `package.json` comes from upstream) no yalc links — `--take

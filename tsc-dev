@@ -46,6 +46,11 @@
 #                                     Derived from the repo's own pull_request workflows, so
 #                                     repo-specific gates (lint:zod, format:check, smoke-test:dist)
 #                                     can't drift out of a hand-maintained list.
+#   ./tsc-dev pr-push <repo> <br>     Push the worktree's branch to your fork (or to origin if you
+#                                     have write access) and open the PR against tscircuit/<repo>.
+#   ./tsc-dev fork <repo...>          Create your fork of each repo and wire it up as the `fork`
+#                                     remote, keeping origin pointed at tscircuit. --org <org> forks
+#                                     into an organization. No-op if you already have push access.
 #   ./tsc-dev pr-link <repo> <br> <d> Link workspace repo <d> into the worktree via a PRIVATE yalc
 #                                     store, so it cannot disturb your feature environment's links.
 #   ./tsc-dev pr-list                 List PR worktrees and their commits ahead of upstream
@@ -762,7 +767,7 @@ cmd_pr() {
   echo "✓ isolated worktree ready: $dir"
   echo "    cd $dir"
   echo "    ./tsc-dev pr-check $repo $branch      # run exactly the gates CI runs on a PR"
-  echo "    git -C $dir push -u fork $branch && gh pr create -R tscircuit/$repo"
+  echo "    ./tsc-dev pr-push  $repo $branch      # push to your fork (or origin) + open the PR"
   [ "$failed_pick" = 1 ] && return 1
   return 0
 }
@@ -850,6 +855,100 @@ cmd_pr_rm() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Contributing: forks vs. direct push
+#
+# Nothing user-specific belongs in this repo. The convention is:
+#   origin  = github.com/tscircuit/<repo>   (upstream, same for everyone)
+#   fork    = github.com/<you>/<repo>       (yours; a per-checkout git remote)
+# so identity lives in each checkout's git config, which is already per-user and
+# untracked. `./tsc-dev fork <repo>` creates the fork and wires that remote for
+# whoever is logged into `gh`.
+#
+# Maintainers with push access to tscircuit/<repo> need no fork — they branch on
+# origin. Both paths work here: push_remote_for picks `fork` when the remote
+# exists, otherwise `origin` when GitHub reports push permission.
+# ---------------------------------------------------------------------------
+
+gh_user() {
+  command -v gh >/dev/null 2>&1 || die "this needs the GitHub CLI (gh)"
+  gh api user --jq .login 2>/dev/null || die "gh is not authenticated (run: gh auth login)"
+}
+
+# Does the authenticated user have push access to the upstream repo?
+repo_push_access() {
+  gh api "repos/tscircuit/$1" --jq '.permissions.push // false' 2>/dev/null | grep -qx true
+}
+
+# Which remote should a PR branch be pushed to?
+push_remote_for() {
+  local repo="$1"
+  if git -C "$ROOT/$repo" remote | grep -qx fork; then echo "fork"; return 0; fi
+  if repo_push_access "$repo"; then echo "origin"; return 0; fi
+  return 1
+}
+
+# Create the fork (if needed) and wire it up as the `fork` remote. Idempotent.
+# gh's default would rename origin->upstream and make the fork origin; we keep
+# origin pointing at tscircuit so every other command in this script (and every
+# other developer's checkout) means the same thing by "origin".
+cmd_fork() {
+  local org="" repos=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --org) org="${2:?--org needs an organization}"; shift 2 ;;
+      -*) die "unknown flag '$1'" ;;
+      *) repos+=("$1"); shift ;;
+    esac
+  done
+  [ ${#repos[@]} -gt 0 ] || die "usage: fork <repo> [repo ...] [--org <org>]"
+  local user; user="$(gh_user)"
+  local owner="${org:-$user}" repo
+  for repo in "${repos[@]}"; do
+    have "$repo" || { echo "⚠ $repo: not cloned — skipping"; continue; }
+    if git -C "$ROOT/$repo" remote | grep -qx fork; then
+      echo "✓ $repo: fork remote already set ($(git -C "$ROOT/$repo" remote get-url fork))"
+      continue
+    fi
+    if repo_push_access "$repo"; then
+      echo "ℹ $repo: you have push access to tscircuit/$repo — no fork needed, branch on origin"
+      continue
+    fi
+    echo "▶ forking tscircuit/$repo to $owner"
+    (cd "$ROOT/$repo" && gh repo fork --remote --remote-name fork --clone=false ${org:+--org "$org"}) \
+      || die "gh repo fork failed for $repo"
+    echo "  ↳ fork remote: $(git -C "$ROOT/$repo" remote get-url fork)"
+  done
+}
+
+# Push a PR worktree's branch to your fork (or origin) and open the PR. The head
+# ref is qualified with the fork owner, which is what makes a cross-repo PR work
+# for a contributor without write access.
+cmd_pr_push() {
+  local repo="${1:?usage: pr-push <repo> <branch> [--draft]}"
+  local branch="${2:?usage: pr-push <repo> <branch> [--draft]}"
+  local draft=""; [ "${3:-}" = "--draft" ] && draft="--draft"
+  have "$repo" || die "repo '$repo' is not cloned"
+  local dir; dir="$(wt_dir "$repo" "$branch")"
+  [ -d "$dir" ] || die "no worktree at $dir  (create it: ./tsc-dev pr $repo $branch)"
+  if grep -q '"file:\.yalc/' "$dir/package.json" 2>/dev/null; then
+    die "$dir/package.json still contains yalc links — remove them before pushing"
+  fi
+  local remote; remote="$(push_remote_for "$repo")" \
+    || die "no fork remote and no push access to tscircuit/$repo — run: ./tsc-dev fork $repo"
+  echo "▶ push $branch -> $remote"
+  git -C "$dir" push -u "$remote" "$branch"
+  local head="$branch"
+  if [ "$remote" = "fork" ]; then
+    local url owner
+    url="$(git -C "$ROOT/$repo" remote get-url fork)"
+    owner="$(printf '%s' "$url" | sed -E 's#.*github\.com[:/]([^/]+)/.*#\1#')"
+    head="$owner:$branch"
+  fi
+  echo "▶ gh pr create -R tscircuit/$repo --head $head"
+  (cd "$dir" && gh pr create -R "tscircuit/$repo" --head "$head" ${draft:+$draft})
+}
+
 # The repos carrying the active patch-set effort, and each one's branch — both
 # from workspace.json, so a second effort is a config change, not a code change.
 # Pick a different effort with SYNC_FORK_EFFORT.
@@ -932,7 +1031,7 @@ cmd_sync_forks() {
     dir="$ROOT/$repo"
     echo "=== $repo ($branch) ==="
     git -C "$dir" remote | grep -qx fork \
-      || { echo "  ⚠ no 'fork' remote (gh repo fork tscircuit/$repo --clone=false && git -C $dir remote add fork <url>)"; continue; }
+      || { echo "  ⚠ no 'fork' remote — run: ./tsc-dev fork $repo"; continue; }
     git -C "$dir" fetch origin --quiet || { echo "  ✗ fetch failed — skipping"; continue; }
     fork_fetch_ok=1
     if ! git -C "$dir" fetch fork --prune --quiet; then
@@ -1029,7 +1128,9 @@ main() {
     prune-store) cmd_prune_store "$@" ;;
     pr)       cmd_pr "$@" ;;
     pr-check) cmd_pr_check "$@" ;;
+    pr-push)  cmd_pr_push "$@" ;;
     pr-link)  cmd_pr_link "$@" ;;
+    fork)     cmd_fork "$@" ;;
     pr-list)  cmd_pr_list "$@" ;;
     pr-rm)    cmd_pr_rm "$@" ;;
     rebuild) cmd_rebuild "$@" ;;

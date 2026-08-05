@@ -43,6 +43,8 @@ commands. Common ones:
 | `./tsc-dev prune-store [--keep N]` | delete old `-local.*` builds from the yalc store (released versions untouched) |
 | `./tsc-dev pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
 | `./tsc-dev pr-check <repo> <branch>` | run the gates CI runs on a PR, derived from that repo's workflows |
+| `./tsc-dev pr-push <repo> <branch>` | push the branch to your fork (or origin) and open the PR |
+| `./tsc-dev fork <repo...>` | create your fork and wire it up as the `fork` remote (`--org` for orgs) |
 | `./tsc-dev pr-link <repo> <br> <dep>` | link a workspace package into a PR worktree via a private yalc store |
 | `./tsc-dev pr-list` / `pr-rm` | list / remove PR worktrees |
 | `./tsc-dev rebuild <repo...>` | link local deps + build + `yalc push` for each repo **in order** (propagate a change up the chain) |
@@ -314,6 +316,48 @@ mutating steps (`--write`) and CI-sharding helpers. `bun test` is appended when
 the repo has test files, because several repos invoke it from a matrix-sharded
 multi-line step that no line-level parse can reconstruct — and the correct local
 equivalent is simply the whole suite.
+
+### Contributing from a fork (this workspace is not tied to any one account)
+
+Nothing in this repo names a person. Your GitHub identity lives in each
+checkout's **git remotes**, which are per-user and untracked, under a convention
+that means the same thing for everyone:
+
+```
+origin  = github.com/tscircuit/<repo>    upstream — identical for every developer
+fork    = github.com/<you>/<repo>        yours
+```
+
+```bash
+./tsc-dev fork core circuit-json          # creates the forks + wires the remotes
+./tsc-dev fork core --org my-org          # or fork into an organization
+```
+
+This deliberately does *not* use `gh repo fork`'s default behaviour, which
+renames `origin` to `upstream` and makes your fork `origin`. Every other command
+here — `pr --base origin/main`, `sync-forks`, `rebuild_chain` — means "upstream"
+when it says `origin`, and that has to hold in your checkout and a new
+contributor's alike, so `fork` is added as an extra remote instead.
+
+**Maintainers with write access need no fork.** `./tsc-dev fork` detects push
+permission and tells you to branch on origin instead, and `pr-push` picks the
+remote the same way: `fork` if the remote exists, otherwise `origin` if GitHub
+reports push access, otherwise it stops and tells you to run `./tsc-dev fork`.
+
+```bash
+./tsc-dev pr-push core fix/pad-transform          # push + gh pr create
+./tsc-dev pr-push core fix/pad-transform --draft
+```
+
+When pushing to a fork, the PR head is qualified as `<owner>:<branch>` — that
+qualification is what makes a cross-repo PR work for a contributor without write
+access. `pr-push` also refuses to push a `package.json` that still contains
+`file:.yalc/` links.
+
+**Rule for anything added to this repo:** no absolute paths, no usernames, no
+machine-specific state. Per-developer facts belong in git remotes or git config.
+(`bin/tsci` hardcoded one developer's `/Users/.../src/tscircuit` and now derives
+the workspace root from its own location.)
 
 ## Local build versions
 

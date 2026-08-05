@@ -8,8 +8,8 @@
 #   - @tscircuit/eval  (handles `.cjs` node_modules like jscad-planner)
 #
 # Use it exactly like `tsci`, from your project directory, e.g.:
-#   cd ../tscdevtest && /Users/drew/src/tscircuit/bin/tsci build
-#   cd ../tscdevtest && /Users/drew/src/tscircuit/bin/tsci export -f stl   # etc.
+#   cd ../my-project && ~/src/tscircuit/bin/tsci build
+#   cd ../my-project && ~/src/tscircuit/bin/tsci export -f stl   # etc.
 #
 # Node commands (build, export, check, ...) get the fixes via these links.
 #
@@ -19,7 +19,9 @@
 # which fills the eval-worker placeholder. This wrapper is for the Node path.
 #
 set -euo pipefail
-ROOT="/Users/drew/src/tscircuit"
+# Derive the workspace root from this script's location — never hardcode a path,
+# this file is shared and every developer's checkout lives somewhere different.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI_MAIN="$ROOT/cli/cli/main.ts"
 [ -f "$CLI_MAIN" ] || { echo "cli entry not found: $CLI_MAIN" >&2; exit 1; }
 exec bun "$CLI_MAIN" "$@"
