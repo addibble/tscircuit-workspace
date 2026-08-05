@@ -1058,6 +1058,21 @@ local_remote() {
   echo "▶ workspace fork remote: $url"
 }
 
+# Where a user branch may be pushed. The invariant is not "anywhere but origin"
+# — it is that a user/* branch must never reach the ORG's shared repo. Until
+# this workspace is upstreamed to github.com/tscircuit, your own repo is both
+# the home of main and the home of your user branch, and pushing there is right.
+local_push_remote() {
+  if git -C "$ROOT" remote | grep -qx fork; then echo "fork"; return 0; fi
+  local origin_url
+  origin_url="$(git -C "$ROOT" remote get-url origin 2>/dev/null || echo)"
+  [ -n "$origin_url" ] || return 1
+  case "$origin_url" in
+    *github.com[:/]tscircuit/*) return 1 ;;   # the org's shared repo
+    *) echo "origin" ;;
+  esac
+}
+
 local_save() {
   local msg="Update user workspace layer"
   [ "${1:-}" = "-m" ] && { msg="${2:?-m needs a message}"; shift 2; }
@@ -1069,35 +1084,34 @@ local_save() {
     git -C "$LOCAL_DIR" commit -q -m "$msg"
     echo "▶ committed: $msg"
   fi
-  local branch; branch="$(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)"
-  if git -C "$ROOT" remote | grep -qx fork; then
-    # Only ever your fork: this branch must never reach the shared repo.
-    if [ "$(git -C "$ROOT" remote get-url fork)" = "$(git -C "$ROOT" remote get-url origin 2>/dev/null || echo)" ]; then
-      die "'fork' and 'origin' point at the same URL — refusing to push a user branch upstream"
-    fi
-    git -C "$LOCAL_DIR" push -q -u fork "HEAD:refs/heads/$branch" && echo "▶ pushed $branch to fork"
+  local branch remote
+  branch="$(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)"
+  if remote="$(local_push_remote)"; then
+    git -C "$LOCAL_DIR" push -q -u "$remote" "HEAD:refs/heads/$branch" \
+      && echo "▶ pushed $branch to $remote"
   else
-    echo "ℹ no 'fork' remote for the workspace repo — set one with:"
-    echo "    ./tsc-dev local remote git@github.com:<you>/<workspace-repo>.git"
+    echo "ℹ nowhere to push this branch (origin is the org's shared repo)."
+    echo "    Set your own: ./tsc-dev local remote git@github.com:<you>/tscircuit-workspace.git"
   fi
 }
 
 local_sync() {
   require_local_layer
-  git -C "$ROOT" remote | grep -qx fork || die "no 'fork' remote (./tsc-dev local remote <git-url>)"
-  local branch; branch="$(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)"
-  git -C "$LOCAL_DIR" fetch fork --quiet || die "fetch failed"
-  if git -C "$LOCAL_DIR" merge --ff-only "fork/$branch" >/dev/null 2>&1; then
-    echo "✓ $branch up to date with fork"
+  local remote branch
+  remote="$(local_push_remote)" || die "no remote for your layer (./tsc-dev local remote <git-url>)"
+  branch="$(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)"
+  git -C "$LOCAL_DIR" fetch "$remote" --quiet || die "fetch failed"
+  if git -C "$LOCAL_DIR" merge --ff-only "$remote/$branch" >/dev/null 2>&1; then
+    echo "✓ $branch up to date with $remote"
   else
-    echo "⚠ $branch could not fast-forward from fork/$branch — reconcile by hand"
+    echo "⚠ $branch could not fast-forward from $remote/$branch — reconcile by hand"
   fi
 }
 
 local_status() {
   if [ ! -d "$LOCAL_DIR" ]; then echo "no user layer (./tsc-dev local init)"; return 0; fi
   echo "• branch   $(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)  ($(git -C "$LOCAL_DIR" rev-parse --short HEAD))"
-  echo "• remote   $(git -C "$ROOT" remote get-url fork 2>/dev/null || echo '(none — ./tsc-dev local remote <git-url>)')"
+  echo "• pushes to $(local_push_remote 2>/dev/null || echo '(nowhere — ./tsc-dev local remote <git-url>)')"
   echo "• config   $([ -f "$LOCAL_CONFIG" ] && echo workspace.local.json || echo '(none)')"
   if [ -f "$LOCAL_LOCK" ]; then
     echo "• lock     workspace.lock.json ($(json_count "$LOCAL_LOCK" repos) repos)"
@@ -1148,7 +1162,14 @@ peer_ref() {
 
 env_add() {
   local owner="${1:?usage: env add <owner> [git-url]}" url="${2:-}"
-  [ -n "$url" ] || url="https://github.com/$owner/$(basename "$ROOT").git"
+  if [ -z "$url" ]; then
+    # Same repo name as ours, under their account. Derive it from origin rather
+    # than from the local directory name, which is whatever each developer
+    # happened to call their checkout.
+    local name
+    name="$(basename -s .git "$(git -C "$ROOT" remote get-url origin 2>/dev/null || basename "$ROOT")")"
+    url="https://github.com/$owner/$name.git"
+  fi
   local remote; remote="$(peer_remote "$owner")"
   if git -C "$ROOT" remote | grep -qx "$remote"; then
     git -C "$ROOT" remote set-url "$remote" "$url"
