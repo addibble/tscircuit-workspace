@@ -1,6 +1,6 @@
 {
   "$comment": "Snapshot of a build environment: every cloned repo's clone URL, branch and SHA plus the yalc links between them. Reproduce with `./tsc-dev env adopt <owner>`. Regenerate with `./tsc-dev freeze`.",
-  "generatedAt": "2026-08-05T18:35:14.630Z",
+  "generatedAt": "2026-08-05T18:41:33.234Z",
   "tool": {
     "workspaceCommit": "cd946ed2d83c43cfc4a76d12446dd88d5ae84f16",
     "bun": "1.3.14",
@@ -9,7 +9,7 @@
   "repos": {
     "3d-viewer": {
       "branch": "feat/parametric-enclosures",
-      "sha": "7f1008451de812f7c33c43996e83fec2bd6efd54",
+      "sha": "91ad0b7dc3a1e2df592291be8c3063e55c0659cd",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/3d-viewer",
       "cloneUrl": "https://github.com/tscircuit/3d-viewer",
@@ -218,7 +218,7 @@
     },
     "cli": {
       "branch": "rfc/parametric-enclosures",
-      "sha": "a2cec1cb929219168342e113bb86ffcae8fd60c6",
+      "sha": "6900958642d26db5f545ee8f382e2a3aaabdf538",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/cli",
       "cloneUrl": "https://github.com/tscircuit/cli",
@@ -267,7 +267,7 @@
     },
     "core": {
       "branch": "feat/parametric-enclosures",
-      "sha": "7236974ad4b097aff306788020695b72496b1864",
+      "sha": "f2db84e94d35d429213a155c06bedfb2c62e8fee",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/core.git",
       "cloneUrl": "https://github.com/tscircuit/core.git",
@@ -414,7 +414,7 @@
     },
     "jscad-electronics": {
       "branch": "fix/connected-right-angle-pinrow",
-      "sha": "dbac8b45b234574c1144df9c1cef667e4715f4eb",
+      "sha": "d1097c00af5844e1b1d4411f55dce345deb2eb40",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/jscad-electronics.git",
       "cloneUrl": "https://github.com/tscircuit/jscad-electronics",
@@ -603,7 +603,7 @@
     },
     "props": {
       "branch": "feat/parametric-enclosures",
-      "sha": "1c153ad0cfb5decf1a814e225c6f08b623a1eddf",
+      "sha": "0cdeb63ae952428b679b34e9acc73c3acc75a8b5",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/props.git",
       "cloneUrl": "https://github.com/tscircuit/props",
@@ -612,11 +612,11 @@
         "fork": "https://github.com/addibble/props.git",
         "origin": "https://github.com/tscircuit/props"
       },
-      "dirty": true
+      "dirty": false
     },
     "rfc": {
       "branch": "feat/parametric-enclosures",
-      "sha": "8a855af6955495e751792f80684dfc2eeea5bf40",
+      "sha": "3df34be4a45aafdc69c1f0c90256cbaa30fef3ff",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/rfc.git",
       "cloneUrl": "https://github.com/tscircuit/rfc.git",
@@ -625,7 +625,7 @@
         "fork": "https://github.com/addibble/rfc.git",
         "origin": "https://github.com/tscircuit/rfc.git"
       },
-      "dirty": true
+      "dirty": false
     },
     "runframe": {
       "branch": "main",
