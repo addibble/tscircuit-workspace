@@ -226,11 +226,22 @@ watchers keep it current:
 
 ```bash
 ./tsc-dev playground init ../tsc-playground --effort parametric-enclosures
-./tsc-dev playground start            # watchers rebuild + push on every save
+./tsc-dev playground start            # watchers + web viewer on :3020 (default)
+./tsc-dev playground start --no-dev   # watchers only
 ./tsc-dev playground status           # works from any shell, or a later session
-./tsc-dev playground logs watch-core
+./tsc-dev playground logs dev-tsc-playground
 ./tsc-dev playground stop             # ALWAYS stop when you finish
 ```
+
+The web viewer starts by default at `http://localhost:3020/`. It picks up edits
+to the playground's own `.tsx` on save, and Node-path changes (`tsci build`,
+exports) as soon as a watcher pushes — but a package change reaches the
+**browser** view only after `eval` is rebuilt and the dev server restarted,
+because the browser runs eval inside runframe's prebuilt bundle.
+
+**Starting a watcher builds that repo immediately.** Do not start a playground
+while someone else is running that repo's test suite — `push` rewrites `dist/`
+and briefly stamps `package.json`, which reads as a flaky test failure.
 
 **Bind the playground to the effort, not to a list of repos.** The effort
 already names the repos a change spans, so the watch set follows it: add a repo

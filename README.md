@@ -466,11 +466,30 @@ links into it. Register it once; watchers then keep it current on every save.
 
 ```bash
 ./tsc-dev playground init ../tsc-playground --effort parametric-enclosures
-./tsc-dev playground start [--dev]     # --dev also starts `tsc-dev dev --local`
+./tsc-dev playground start             # watchers + the web viewer on :3020
+./tsc-dev playground start --no-dev    # watchers only
 ./tsc-dev playground status            # from any shell, in any later session
-./tsc-dev playground logs watch-core
+./tsc-dev playground logs dev-tsc-playground
 ./tsc-dev playground stop
 ```
+
+The web viewer starts **by default** — `start` runs `tsc-dev dev --local`,
+serving your locally-built runframe standalone with the local eval worker
+injected, at `http://localhost:3020/#file=<entrypoint>`. `--no-dev` (or
+`"dev": false` on the playground) starts watchers only. If runframe has never
+been built locally, `start` says so instead of failing silently.
+
+What the running viewer picks up, and what it does not:
+
+| Edit | Seen after |
+|---|---|
+| the playground's own `.tsx` | saving — the dev server watches the project |
+| a watched package (`core`, `props`, …) on the **Node** path (`tsci build`, exports) | the watcher's push, ~10-20s |
+| a watched package in the **browser** view | rebuilding `eval` (its webworker inlines core) and restarting the dev server, which re-injects the worker |
+| `runframe`'s own UI | rebuilding runframe (~5 min) |
+
+That asymmetry is inherent: the browser runs eval inside runframe's prebuilt
+bundle, so package changes reach it only when that bundle is re-inlined.
 
 ### Bind the playground to an effort, not to a list of repos
 

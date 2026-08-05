@@ -28,7 +28,9 @@
 #                                     (debounced; drives the repo's own build, nothing is added to it)
 #   ./tsc-dev playground <sub>        Manage a circuit project you test against, and its daemons:
 #                                       init <path> [--name n] [--watch a,b]  register it
-#                                       start [name] [--dev]   watchers (+ dev server with --dev)
+#                                       start [name] [--no-dev]  watchers + the web viewer (the dev
+#                                                              server starts by default; --no-dev
+#                                                              starts watchers only)
 #                                       status [name]          what is running, from any shell
 #                                       logs <daemon> [lines]  tail a daemon's log
 #                                       stop | restart         daemons survive an agent session, so
@@ -458,10 +460,13 @@ start_daemon() {
   mkdir -p "$RUN_DIR"
   if daemon_alive "$key"; then echo "  ✓ $key already running (pid $(cat "$(daemon_pidfile "$key")"))"; return 0; fi
   local log; log="$(daemon_logfile "$key")"
-  # nohup + disown so the daemon outlives this shell, and therefore this agent
-  # session; the pid file is how a later session finds it again.
+  # `set -m` puts the job in its own process group, so stop_daemon can signal
+  # the whole group. Without it, killing the recorded pid orphans the real
+  # server: `dev` execs bun inside a subshell, and that child keeps the port.
+  set -m
   nohup "$@" >>"$log" 2>&1 &
   local pid=$!
+  set +m
   disown 2>/dev/null || true
   echo "$pid" > "$(daemon_pidfile "$key")"
   sleep 0.3
@@ -480,10 +485,13 @@ stop_daemon() {
   pid="$(cat "$(daemon_pidfile "$key")" 2>/dev/null || echo)"
   if [ -z "$pid" ]; then echo "  · $key not running"; return 0; fi
   if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    # give it a moment, then insist
-    sleep 0.4
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    # Signal the process GROUP first (negative pid), falling back to the single
+    # process; then insist. Group-first is what actually stops the dev server.
+    kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    sleep 0.5
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+    fi
     echo "  ■ stopped $key (pid $pid)"
   else
     echo "  · $key was not running (stale pid $pid)"
@@ -516,7 +524,8 @@ c.playgrounds=c.playgrounds||{};
 const entry={path:dir};
 if(effort)entry.effort=effort;
 if(watch)entry.watch=watch.split(",").filter(Boolean);
-entry.dev=c.playgrounds[name]?.dev??false;
+// `dev` is only recorded to turn the web viewer OFF; absent means on.
+if(c.playgrounds[name]?.dev===false)entry.dev=false;
 c.playgrounds[name]=entry;
 fs.writeFileSync(file,JSON.stringify(c,null,2)+"\n");
 ' "$LOCAL_CONFIG" "$name" "$dir" "$watch" "$effort"
@@ -526,9 +535,22 @@ fs.writeFileSync(file,JSON.stringify(c,null,2)+"\n");
 }
 
 playground_start() {
-  local name="${1:-$(default_playground)}" dev=0
-  shift 2>/dev/null || true
-  while [ $# -gt 0 ]; do case "$1" in --dev) dev=1; shift ;; *) die "unknown argument '$1'" ;; esac; done
+  local name="" dev_flag=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dev) dev_flag=1; shift ;;
+      --no-dev) dev_flag=0; shift ;;
+      -*) die "unknown argument '$1'" ;;
+      *) [ -z "$name" ] && name="$1" || die "unexpected argument '$1'"; shift ;;
+    esac
+  done
+  [ -n "$name" ] || name="$(default_playground)"
+  # The web viewer is the point of a playground, so it starts by default. A
+  # flag wins over config; `"dev": false` on the playground opts out durably.
+  local dev="$dev_flag"
+  if [ -z "$dev" ]; then
+    if [ "$(ws "w.playgrounds?.[args[0]]?.dev === false ? 'off' : 'on'" "$name")" = "off" ]; then dev=0; else dev=1; fi
+  fi
   local dir; dir="$(playground_dir "$name")"
   echo "▶ playground '$name' → $dir"
   echo "  $(playground_watch_explain "$name" | head -1)"
@@ -540,15 +562,28 @@ playground_start() {
     have "$repo" || { echo "  ⚠ $repo is not cloned — skipping"; continue; }
     start_daemon "watch-$repo" node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" push "$repo"
   done < <(playground_watch_repos "$name")
-  if [ "$dev" = 1 ] || [ "$(ws "(w.playgrounds?.[args[0]]||{}).dev" "$name")" = "true" ]; then
-    start_daemon "dev-$name" "$ROOT/tsc-dev" dev "$dir" --local
+  if [ "$dev" = 1 ]; then
+    # The browser needs runframe's standalone bundle; `dev --local` serves the
+    # locally-built one with the local eval worker injected.
+    if [ ! -f "$ROOT/runframe/dist/standalone.min.js" ]; then
+      echo "  ⚠ no local runframe bundle — the web viewer needs: ./tsc-dev rebuild --from eval --to runframe"
+    else
+      start_daemon "dev-$name" "$ROOT/tsc-dev" dev "$dir" --local
+    fi
   fi
   echo "  ./tsc-dev playground status $name"
 }
 
 playground_status() {
-  local name="${1:-$(default_playground)}" dir key
-  dir="$(playground_dir "$name")"
+  local name="" key
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -*) shift ;;
+      *) [ -z "$name" ] && name="$1"; shift ;;
+    esac
+  done
+  [ -n "$name" ] || name="$(default_playground)"
+  local dir; dir="$(playground_dir "$name")"
   echo "• playground '$name' → ${dir/#$HOME/~}"
   echo "  $(playground_watch_explain "$name" | head -1)"
   local wanted; wanted="$(playground_watch_repos "$name" | tr '\n' ' ')"
