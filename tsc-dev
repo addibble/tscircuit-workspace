@@ -96,6 +96,9 @@
 #   ./tsc-dev fork <repo...>          Create your fork of each repo and wire it up as the `fork`
 #                                     remote, keeping origin pointed at tscircuit. --org <org> forks
 #                                     into an organization. No-op if you already have push access.
+#   ./tsc-dev gen-map [--check]       Regenerate MAP.md's group sections from workspace.json (or
+#                                     verify they are in sync, for CI / pre-commit)
+#   ./tsc-dev test [path...]          Run the workspace's own tests (bun test ./test/)
 #   ./tsc-dev pkgname <repo>          Print the npm package name a repo publishes
 #   ./tsc-dev status                  List cloned repos, their package names, and active yalc links
 #   ./tsc-dev sync-forks [repo...]    Update each fork to head of upstream main with your patches on
@@ -434,8 +437,13 @@ cmd_rebuild() {
   if [ -n "$from" ]; then
     [ ${#repos[@]} -eq 0 ] || die "--from and an explicit repo list are mutually exclusive"
     have "$from" || die "repo '$from' is not cloned"
-    while IFS= read -r r; do [ -n "$r" ] && repos+=("$r"); done < <(rebuild_chain "$from" "$to")
-    [ ${#repos[@]} -gt 0 ] || die "no rebuild chain from '$from' (is it in workspace.json's bundling graph?)"
+    # rebuild-chain.mjs reports its own specific failure (not downstream, cycle)
+    # on stderr; don't paper over it with a vaguer message.
+    local chain_out chain_rc=0
+    chain_out="$(rebuild_chain "$from" "$to")" || chain_rc=$?
+    [ "$chain_rc" -eq 0 ] || exit "$chain_rc"
+    while IFS= read -r r; do [ -n "$r" ] && repos+=("$r"); done <<< "$chain_out"
+    [ ${#repos[@]} -gt 0 ] || die "'$from' is not in workspace.json's bundling graph"
     echo "▶ chain from $from: ${repos[*]}"
   fi
   [ ${#repos[@]} -ge 1 ] || die "usage: rebuild <repo> [repo ...] | rebuild --from <repo> [--to <repo>] [--dry-run]"
@@ -690,36 +698,9 @@ origin_head() {
   fi
 }
 
-# The commands CI actually runs on a pull request, read from the repo's own
-# workflows rather than from a table someone has to maintain — the gate set
-# varies per repo (circuit-json's `lint:zod`, core's `smoke-test:dist`,
-# dependency-check, ...) and a hand-copied list is exactly what goes stale.
-# Only pull_request-triggered workflows count, which drops release, bot and
-# codegen jobs; the filter then removes installs, mutating (--write) steps, and
-# anything parameterised by a workflow expression.
+# The commands CI actually runs on a pull request (see bin/ci-gates.mjs).
 ci_gates() {
-  local dir="$1" f
-  {
-    for f in "$dir"/.github/workflows/*.yml "$dir"/.github/workflows/*.yaml; do
-      [ -f "$f" ] || continue
-      grep -q 'pull_request' "$f" || continue
-      sed -nE 's/^[[:space:]]*(-[[:space:]]*)?run:[[:space:]]*//p' "$f"
-      # Several workflow files have no trailing newline; without this the last
-      # command of one file fuses onto the first command of the next.
-      printf '\n'
-    done
-    # `bun test` is frequently invoked from a multi-line, matrix-sharded step
-    # (core shards 10 ways through .github/test-plans/), which no line-level
-    # parse can reconstruct — and the right local equivalent is just the whole
-    # suite. Appended last because it is also the slowest gate.
-    if [ -n "$(find "$dir" -name '*.test.*' -not -path '*/node_modules/*' -print -quit 2>/dev/null)" ]; then
-      echo "bun test"
-    fi
-  } \
-    | sed 's/[[:space:]]*$//' \
-    | grep -vE '^\|$|^$' \
-    | grep -vE '\$\{\{|--write|^bun (install|i|add|update)|^npm (install|ci|publish)|^npx? .*publish|pver|bunaider|generate-test-plan|^echo|^exit|^git ' \
-    | awk '!seen[$0]++'   # dedup, but keep workflow order: build must precede smoke-test:dist
+  node "$ROOT/bin/ci-gates.mjs" "$1"
 }
 
 cmd_pr() {
@@ -1280,6 +1261,20 @@ env_adopt() {
   echo "    cd $target && ./tsc-dev install && ./tsc-dev env diff $owner"
 }
 
+cmd_gen_map() {
+  local mode="write"
+  [ "${1:-}" = "--check" ] && mode="check"
+  node "$ROOT/bin/gen-map.mjs" "$mode" "$ROOT"
+}
+
+# The workspace's own tests. Always give bun an explicit path: the workspace
+# root has ~60 cloned repos under it, and a bare `bun test` would walk into all
+# of them.
+cmd_test() {
+  command -v bun >/dev/null 2>&1 || die "bun is not installed"
+  if [ $# -gt 0 ]; then (cd "$ROOT" && bun test "$@"); else (cd "$ROOT" && bun test ./test/); fi
+}
+
 cmd_env() {
   local sub="${1:-list}"; shift || true
   case "$sub" in
@@ -1478,6 +1473,8 @@ main() {
     config)   cmd_config "$@" ;;
     freeze)   cmd_freeze "$@" ;;
     env)      cmd_env "$@" ;;
+    gen-map)  cmd_gen_map "$@" ;;
+    test)     cmd_test "$@" ;;
     pr-list)  cmd_pr_list "$@" ;;
     pr-rm)    cmd_pr_rm "$@" ;;
     rebuild) cmd_rebuild "$@" ;;

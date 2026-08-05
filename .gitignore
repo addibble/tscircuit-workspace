@@ -18,6 +18,7 @@
 !/tsc-dev
 !/workspace.json
 !/bin/
+!/test/
 
 # Machine-local state, regenerable — never shared:
 #   .tscircuit-repos.txt  cache of org repo names (refresh with gh, see AGENTS.md)

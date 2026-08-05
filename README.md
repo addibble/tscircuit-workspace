@@ -74,6 +74,12 @@ commands. Common ones:
 | `./tsc-dev rebuild <repo...>` | link local deps + build + `yalc push` for each repo **in order** (propagate a change up the chain) |
 | `./tsc-dev dev [path] [--local]` | run the CLI dev server **from source** on a circuit project; `--local` serves your locally-built runframe |
 | `./tsc-dev status` | list cloned repos, package names, and active links |
+| `./tsc-dev local <init\|save\|sync\|status>` | manage your config layer (orphan branch, pushed to your fork) |
+| `./tsc-dev config [key]` | effective merged config + which layer each key came from |
+| `./tsc-dev freeze` | snapshot this build environment into your layer |
+| `./tsc-dev env <add\|show\|diff\|adopt>` | read and reproduce a peer's build environment |
+| `./tsc-dev gen-map [--check]` | regenerate (or verify) MAP.md's group sections from `workspace.json` |
+| `./tsc-dev test` | run the workspace's own test suite |
 
 ## Dependency layers
 
@@ -341,7 +347,37 @@ the repo has test files, because several repos invoke it from a matrix-sharded
 multi-line step that no line-level parse can reconstruct — and the correct local
 equivalent is simply the whole suite.
 
-### Contributing from a fork (this workspace is not tied to any one account)
+### Working on the tooling
+
+```bash
+./tsc-dev test              # bun test ./test/
+./tsc-dev gen-map --check   # MAP.md must match workspace.json
+```
+
+The parts that can silently give a *wrong answer* live in `bin/*.mjs` with tests
+in `test/`, rather than in the bash:
+
+| Module | Pinned behaviour |
+|---|---|
+| `workspace-config.mjs` | layer merge: objects merge per key, arrays replace, inputs are not mutated |
+| `rebuild-chain.mjs` | dependencies precede consumers; `--to` truncation; unverified edges dropped; uncloned repos skipped; cycles reported |
+| `ci-gates.mjs` | only `pull_request` workflows; workflow order preserved; installs/bots/mutating steps excluded; no cross-file fusion |
+| `env-lock.mjs` | which discrepancies are *differences* (fail) vs *warnings* (dirty tree, extra repos) |
+| `gen-map.mjs` | only the marked block is replaced; regeneration is idempotent; missing markers error |
+
+Two conventions those modules follow, both learned from bugs found here:
+**importing a module must have no side effects** (each CLI body is behind an
+is-main guard that compares *realpaths*, since node resolves symlinks when
+loading a module), and **decision logic is pure with the filesystem injected**,
+so a test states the rule instead of building a workspace on disk.
+
+There is deliberately **no root `package.json`**: bun walks up from a
+subdirectory to find one, so a root manifest would change how `bun install`
+resolves inside every cloned repo and diverge from CI. The tests need no
+dependencies, so none is required — but always pass an explicit path (as
+`./tsc-dev test` does), or `bun test` will walk into all ~60 cloned repos.
+
+## Contributing from a fork (this workspace is not tied to any one account)
 
 Nothing in this repo names a person. Your GitHub identity lives in each
 checkout's **git remotes**, which are per-user and untracked, under a convention

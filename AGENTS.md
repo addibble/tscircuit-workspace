@@ -53,9 +53,37 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `config [key]` | effective merged config + which layer each key came from |
 | `freeze` | snapshot this build environment into your layer |
 | `env <add\|show\|diff\|adopt>` | read and reproduce a peer's build environment |
+| `gen-map [--check]` | regenerate (or verify) MAP.md's group sections from `workspace.json` |
+| `test` | run the workspace's own test suite (`bun test ./test/`) |
 | `dev [file]` | run the CLI dev server **from source** |
 | `unlink <consumer>` | `yalc remove --all` + `bun install` (restore npm versions) |
 | `status` | list cloned repos, package names, active yalc links |
+
+## Changing the workspace tooling itself
+
+The logic that can silently produce a *wrong answer* — config layering, rebuild
+chains, CI-gate parsing, environment comparison — lives in `bin/*.mjs` with tests
+in `test/`, not in the bash. Run them before committing:
+
+```bash
+./tsc-dev test              # bun test ./test/  (35 tests, no deps, no package.json)
+./tsc-dev gen-map --check   # MAP.md is generated from workspace.json
+```
+
+Always give `bun test` an explicit path (`./tsc-dev test` does): the workspace
+root has ~60 cloned repos beneath it and a bare `bun test` would walk into all
+of them.
+
+Two rules those modules follow, both learned from real bugs here:
+
+- **Importing a module must have no side effects.** Each CLI body is guarded by
+  an is-main check comparing **realpaths** — node resolves symlinks when loading
+  a module, so a naive `import.meta.url` comparison reports "imported" whenever
+  a path component is a symlink (`/tmp` on macOS), and the command silently
+  exits 0 having done nothing.
+- **Keep the decision logic pure and inject the filesystem.** `resolveChain`,
+  `compareEnvironments` and `merge` take plain data, so their tests state the
+  rule rather than rebuilding a workspace on disk.
 
 ## Repo layout & discovery
 
@@ -72,6 +100,10 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
   reproduces it with `./tsc-dev env adopt <owner> --into <dir>`. The lock records
   each branch's remote **URL**, so fork-based patch sets reproduce as forks
   rather than silently falling back to upstream.
+- **`MAP.md`'s group sections are generated** from `workspace.json` by
+  `./tsc-dev gen-map`. Edit the manifest (`groups`, `repoNotes`), not the
+  markdown between the generated markers; everything outside them is
+  hand-written. `./tsc-dev gen-map --check` fails if they have drifted.
 - The org has ~300 active repos. **Clone deliberately** — see `MAP.md` for the
   ~80 that matter, grouped by function.
 - `.tscircuit-repos.txt` caches active org repo names (used to validate

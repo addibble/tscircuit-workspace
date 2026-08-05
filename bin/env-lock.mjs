@@ -18,6 +18,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 
 const git = (dir, ...args) => {
   try {
@@ -107,17 +108,18 @@ function run(cmd, args) {
   }
 }
 
-const diff = (root, lockFile, quiet) => {
-  const lock = JSON.parse(fs.readFileSync(lockFile, "utf8"))
-  const here = capture(root)
+// Compare two captures. The distinction matters: a *difference* means the
+// environments genuinely disagree (wrong commit, missing repo, missing link) and
+// should fail; a *warning* is something that cannot be reproduced but is normal
+// here (a yalc link rewrites package.json, so a dirty tree is the usual working
+// state — treating it as a difference would make every diff red and ignored).
+export const compareEnvironments = (lock, here) => {
   const problems = []
   const warnings = []
-  const note = (line) => {
-    if (!quiet) console.log(line)
-  }
+  const matched = []
 
   for (const [name, want] of Object.entries(lock.repos ?? {})) {
-    const got = here.repos[name]
+    const got = here.repos?.[name]
     if (!got) {
       problems.push(`${name}: not cloned (want ${want.branch} @ ${want.sha.slice(0, 8)} from ${want.remoteUrl})`)
       continue
@@ -129,24 +131,32 @@ const diff = (root, lockFile, quiet) => {
       )
       continue
     }
-    // Dirty is a warning, not a difference: in this workspace a yalc link
-    // rewrites package.json, so a dirty tree is the normal working state. It
-    // still matters (uncommitted work cannot be reproduced), so it is reported.
     if (got.dirty) warnings.push(`${name}: at the locked commit, but with uncommitted changes`)
-    else note(`  \u2713 ${name.padEnd(30)} ${want.branch} @ ${want.sha.slice(0, 8)}`)
+    else matched.push({ name, branch: want.branch, sha: want.sha })
   }
-  for (const name of Object.keys(here.repos)) {
+
+  for (const name of Object.keys(here.repos ?? {})) {
     if (!(name in (lock.repos ?? {}))) warnings.push(`${name}: cloned here, absent from the lock`)
   }
 
   for (const [consumer, want] of Object.entries(lock.links ?? {})) {
-    const got = here.links[consumer] ?? []
+    const got = here.links?.[consumer] ?? []
     const missing = want.filter((p) => !got.includes(p))
     const extra = got.filter((p) => !want.includes(p))
     if (missing.length) problems.push(`${consumer}: missing yalc link(s) ${missing.join(", ")}`)
     if (extra.length) warnings.push(`${consumer}: extra yalc link(s) ${extra.join(", ")}`)
   }
 
+  return { problems, warnings, matched }
+}
+
+const diff = (root, lockFile, quiet) => {
+  const lock = JSON.parse(fs.readFileSync(lockFile, "utf8"))
+  const { problems, warnings, matched } = compareEnvironments(lock, capture(root))
+
+  if (!quiet) {
+    for (const m of matched) console.log(`  \u2713 ${m.name.padEnd(30)} ${m.branch} @ ${m.sha.slice(0, 8)}`)
+  }
   if (warnings.length) {
     console.log("")
     for (const w of warnings) console.log(`  \u26a0 ${w}`)
@@ -154,8 +164,10 @@ const diff = (root, lockFile, quiet) => {
   if (problems.length) {
     console.log("")
     for (const p of problems) console.log(`  \u2717 ${p}`)
-    console.log(`\n\u2717 ${problems.length} difference(s) from ${path.basename(lockFile)}` +
-      (warnings.length ? `, ${warnings.length} warning(s)` : ""))
+    console.log(
+      `\n\u2717 ${problems.length} difference(s) from ${path.basename(lockFile)}` +
+        (warnings.length ? `, ${warnings.length} warning(s)` : ""),
+    )
     process.exit(1)
   }
   console.log(
@@ -164,32 +176,46 @@ const diff = (root, lockFile, quiet) => {
   )
 }
 
-const [mode, root, arg] = process.argv.slice(2)
-if (mode === "capture" && root) {
-  process.stdout.write(JSON.stringify(capture(root), null, 2) + "\n")
-} else if (mode === "diff" && root && arg) {
-  diff(root, arg, process.argv.includes("--quiet"))
-} else if (mode === "summarize") {
-  // read a lock on stdin (used to inspect a peer's without checking it out)
-  let s = ""
-  process.stdin.on("data", (d) => (s += d)).on("end", () => {
-    const l = JSON.parse(s)
-    console.log(
-      `captured ${l.generatedAt}  (bun ${l.tool?.bun || "?"}, workspace ${(l.tool?.workspaceCommit || "").slice(0, 8)})`,
-    )
-    for (const [n, r] of Object.entries(l.repos ?? {})) {
+// Importing this module must have no side effects: the CLI body only runs when
+// the file is executed directly. Compare REAL paths, since node resolves
+// symlinks when loading a module (/tmp -> /private/tmp on macOS).
+const realpath = (p) => {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return p
+  }
+}
+const isMain = process.argv[1] && realpath(process.argv[1]) === realpath(fileURLToPath(import.meta.url))
+
+if (isMain) {
+  const [mode, root, arg] = process.argv.slice(2)
+  if (mode === "capture" && root) {
+    process.stdout.write(JSON.stringify(capture(root), null, 2) + "\n")
+  } else if (mode === "diff" && root && arg) {
+    diff(root, arg, process.argv.includes("--quiet"))
+  } else if (mode === "summarize") {
+    // read a lock on stdin (used to inspect a peer's without checking it out)
+    let s = ""
+    process.stdin.on("data", (d) => (s += d)).on("end", () => {
+      const l = JSON.parse(s)
       console.log(
-        `  ${n.padEnd(30)} ${String(r.branch).padEnd(34)} ${r.sha.slice(0, 8)}` +
-          (r.remote !== "origin" ? `  ${r.remoteUrl}` : ""),
+        `captured ${l.generatedAt}  (bun ${l.tool?.bun || "?"}, workspace ${(l.tool?.workspaceCommit || "").slice(0, 8)})`,
       )
-    }
-    const links = Object.entries(l.links ?? {})
-    if (links.length) {
-      console.log("\n  yalc links:")
-      for (const [consumer, pkgs] of links) console.log(`    ${consumer.padEnd(28)} ${pkgs.join(", ")}`)
-    }
-  })
-} else {
-  console.error("usage: env-lock.mjs capture <root> | diff <root> <lockfile> [--quiet] | summarize -")
-  process.exit(2)
+      for (const [n, r] of Object.entries(l.repos ?? {})) {
+        console.log(
+          `  ${n.padEnd(30)} ${String(r.branch).padEnd(34)} ${r.sha.slice(0, 8)}` +
+            (r.remote !== "origin" ? `  ${r.remoteUrl}` : ""),
+        )
+      }
+      const links = Object.entries(l.links ?? {})
+      if (links.length) {
+        console.log("\n  yalc links:")
+        for (const [consumer, pkgs] of links) console.log(`    ${consumer.padEnd(28)} ${pkgs.join(", ")}`)
+      }
+    })
+  } else {
+    console.error("usage: env-lock.mjs capture <root> | diff <root> <lockfile> [--quiet] | summarize -")
+    process.exit(2)
+  }
 }

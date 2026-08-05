@@ -14,33 +14,99 @@
 
   "groups": {
     "runtime": {
+      "title": "Runtime / rendering chain",
       "description": "The packages that turn React/TSX into a rendered board — the 'system'. See `bundling` below before rebuilding any of these.",
       "repos": ["core", "eval", "runframe", "cli", "tscircuit", "props", "circuit-json"]
     },
     "viewers": {
+      "title": "Viewers",
       "description": "React components / libs that render Circuit JSON.",
       "repos": ["pcb-viewer", "schematic-viewer", "3d-viewer", "assembly-viewer", "runframe", "circuit-to-svg", "circuit-to-canvas"]
     },
     "exporters": {
+      "title": "Exporters",
       "description": "Circuit JSON to manufacturing / interchange formats.",
       "repos": ["circuit-json-to-gerber", "circuit-json-to-kicad", "circuit-json-to-step", "circuit-json-to-spice", "circuit-json-to-gltf", "circuit-json-to-bom-csv", "circuit-json-to-pnp-csv"]
     },
     "autorouting": {
+      "title": "Autorouting",
       "description": "Trace routing: the main MIT autorouter plus the solvers it is built from.",
       "repos": ["tscircuit-autorouter", "capacity-autorouter", "infgrid-ijump-astar", "bus-router", "high-density-a01", "schematic-trace-solver", "freerouting-cli", "dsn-converter"]
     },
     "solvers": {
+      "title": "Layout solvers",
       "description": "Standalone 2D algorithms, each with its own Cosmos debugger (`bun run start`).",
       "repos": ["matchpack", "calculate-packing", "copper-pour-solver", "breakout-point-solver", "schematic-match-adapt", "solver-utils", "miniflex", "minicssgrid", "bpc-graph"]
     },
     "formats": {
+      "title": "Formats / parsers",
       "description": "The data format and the parsers/DSLs around it.",
       "repos": ["circuit-json", "props", "footprinter", "schematic-symbols", "kicadts", "dsnts", "gerberts", "stepts", "circuit-json-util"]
     },
     "importers": {
+      "title": "Importers / converters",
       "description": "Foreign formats into Circuit JSON / tscircuit source.",
       "repos": ["easyeda-converter", "kicad-to-circuit-json", "kicad-converter", "svg-to-tscircuit", "circuit-json-to-tscircuit"]
     }
+  },
+
+  "$repoNotes": "One line per repo, rendered into MAP.md by `./tsc-dev gen-map`. Keep them short: what the package IS, not how to use it.",
+  "repoNotes": {
+    "core": "the React reconciler + component engine",
+    "eval": "transpiles + evaluates TSX to Circuit JSON (in a web worker)",
+    "runframe": "React preview UI (PCB/schematic/3D), runs eval in a worker",
+    "cli": "`tsci dev` local server, push/export/build commands",
+    "tscircuit": "umbrella package + the `tsci` CLI binary",
+    "props": "zod prop schemas for every component",
+    "circuit-json": "the low-level data format everything speaks",
+
+    "pcb-viewer": "interactive PCB canvas",
+    "schematic-viewer": "interactive schematic canvas",
+    "3d-viewer": "three.js board + component preview",
+    "assembly-viewer": "assembly-drawing view",
+    "circuit-to-svg": "Circuit JSON to schematic/PCB/assembly SVG (used everywhere, incl. snapshot tests)",
+    "circuit-to-canvas": "Circuit JSON to a canvas renderer",
+
+    "circuit-json-to-gerber": "Gerber + drill files for fabrication",
+    "circuit-json-to-kicad": "KiCad project/board output",
+    "circuit-json-to-step": "STEP solid model output",
+    "circuit-json-to-spice": "SPICE netlist for simulation",
+    "circuit-json-to-gltf": "glTF scene for 3D preview and export",
+    "circuit-json-to-bom-csv": "bill of materials CSV",
+    "circuit-json-to-pnp-csv": "pick-and-place CSV",
+
+    "tscircuit-autorouter": "the main MIT autorouter",
+    "capacity-autorouter": "capacity-based routing strategy used by it",
+    "infgrid-ijump-astar": "infinite-grid jump-point A* router",
+    "bus-router": "bus/parallel-trace routing",
+    "high-density-a01": "high-density interconnect routing experiment",
+    "schematic-trace-solver": "schematic trace + net-label placement",
+    "freerouting-cli": "wrapper around the Freerouting engine",
+    "dsn-converter": "Specctra DSN in/out for external routers",
+
+    "matchpack": "component placement by matching + packing",
+    "calculate-packing": "2D packing (`pack`)",
+    "copper-pour-solver": "copper pour / ground plane generation",
+    "breakout-point-solver": "escape routing from dense footprints",
+    "schematic-match-adapt": "fit a schematic to a known template",
+    "solver-utils": "the `BaseSolver` framework + `GenericSolverDebugger`",
+    "miniflex": "flexbox layout",
+    "minicssgrid": "CSS grid layout",
+    "bpc-graph": "box-pin-color graph",
+
+    "footprinter": "footprint DSL (`0402`, `soic8`, ...)",
+    "schematic-symbols": "schematic symbol SVG library",
+    "kicadts": "typed KiCad file bindings",
+    "dsnts": "typed Specctra DSN bindings",
+    "gerberts": "typed Gerber bindings",
+    "stepts": "typed STEP bindings",
+    "circuit-json-util": "helpers for querying/transforming Circuit JSON",
+
+    "easyeda-converter": "EasyEDA / LCSC parts into tscircuit",
+    "kicad-to-circuit-json": "KiCad boards into Circuit JSON",
+    "kicad-converter": "KiCad format conversions both ways",
+    "svg-to-tscircuit": "SVG artwork into tscircuit source",
+    "circuit-json-to-tscircuit": "Circuit JSON back into TSX source"
   },
 
   "bundling": {
