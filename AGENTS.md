@@ -225,12 +225,19 @@ A *playground* is an ordinary circuit project outside this workspace (e.g.
 watchers keep it current:
 
 ```bash
-./tsc-dev playground init ../tsc-playground --watch core,create-fdm-enclosure
+./tsc-dev playground init ../tsc-playground --effort parametric-enclosures
 ./tsc-dev playground start            # watchers rebuild + push on every save
 ./tsc-dev playground status           # works from any shell, or a later session
 ./tsc-dev playground logs watch-core
 ./tsc-dev playground stop             # ALWAYS stop when you finish
 ```
+
+**Bind the playground to the effort, not to a list of repos.** The effort
+already names the repos a change spans, so the watch set follows it: add a repo
+to the effort and it gets watched, remove it and it stops. Docs repos in the
+effort (no `package.json`) are skipped. `start` is idempotent — re-run it after
+changing the effort and only the new watcher starts — and `status` flags drift
+in both directions.
 
 Daemons are `nohup`ed with a pid and a log in `.run/`, so they **outlive the
 session that started them**. An agent that starts them must stop them before

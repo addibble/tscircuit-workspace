@@ -465,15 +465,31 @@ A playground is an ordinary circuit project outside this workspace with yalc
 links into it. Register it once; watchers then keep it current on every save.
 
 ```bash
-./tsc-dev playground init ../tsc-playground --watch core,create-fdm-enclosure
+./tsc-dev playground init ../tsc-playground --effort parametric-enclosures
 ./tsc-dev playground start [--dev]     # --dev also starts `tsc-dev dev --local`
 ./tsc-dev playground status            # from any shell, in any later session
 ./tsc-dev playground logs watch-core
 ./tsc-dev playground stop
 ```
 
-With no `--watch`, the repos to watch are derived from the playground's own
-`yalc.lock` — every linked package that is also cloned here.
+### Bind the playground to an effort, not to a list of repos
+
+An effort already names the repos a change spans, so `--effort <name>` derives
+the watch set from it. Add a repo to the effort and it is watched; remove it and
+it stops being watched — there is no second list to keep in sync. Repos in the
+effort with no `package.json` (docs repos like `rfc` and `skill`) are skipped,
+since there is nothing to build or push from them.
+
+Resolution order, most specific first:
+
+1. an explicit `--watch a,b` list on the playground,
+2. `--effort <name>` — every package in that patch set,
+3. otherwise the playground's own `yalc.lock`.
+
+`start` is **idempotent**: already-running watchers are left alone, so after
+adding a repo to the effort, re-running it starts only the new watcher.
+`status` reports drift in both directions — a repo in the set with no watcher,
+and a watcher for a repo that has left the set.
 
 `watch` drives each repo's **own** `bun run build` through `push` (build, stamp,
 propagate). Nothing is added to any repo's `package.json`, so none of this

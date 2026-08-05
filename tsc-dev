@@ -434,18 +434,15 @@ playground_dir() {
   case "$p" in /*) echo "$p" ;; *) (cd "$ROOT/$p" 2>/dev/null && pwd) || die "playground path not found: $p" ;; esac
 }
 
-# Which repos should be watched for a playground: the configured list, or every
-# cloned repo whose package the playground actually links.
+# Which repos should be watched for a playground (see bin/playground-repos.mjs):
+# an explicit list, else every package in the bound effort, else whatever the
+# playground links.
 playground_watch_repos() {
-  local name="$1" dir="$2" configured
-  configured="$(ws "(w.playgrounds?.[args[0]]||{}).watch" "$name" 2>/dev/null)"
-  if [ -n "$configured" ]; then echo "$configured"; return 0; fi
-  local pkg repo
-  while IFS= read -r pkg; do
-    [ -n "$pkg" ] || continue
-    repo="$(repo_for_pkg "$pkg")"
-    [ -n "$repo" ] && echo "$repo"
-  done < <(yalc_lock_pkgs "$dir")
+  node "$ROOT/bin/playground-repos.mjs" "$ROOT" "$1" 2>/dev/null
+}
+
+playground_watch_explain() {
+  node "$ROOT/bin/playground-repos.mjs" "$ROOT" "$1" --explain 2>&1
 }
 
 daemon_pidfile() { echo "$RUN_DIR/$1.pid"; }
@@ -495,29 +492,36 @@ stop_daemon() {
 }
 
 playground_init() {
-  local p="${1:?usage: playground init <path> [--name <name>] [--watch repo,repo]}"; shift || true
-  local name="" watch=""
+  local p="${1:?usage: playground init <path> [--name <name>] [--effort <effort>] [--watch repo,repo]}"; shift || true
+  local name="" watch="" effort=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --name) name="${2:?}"; shift 2 ;;
       --watch) watch="${2:?}"; shift 2 ;;
+      --effort) effort="${2:?}"; shift 2 ;;
       *) die "unknown argument '$1'" ;;
     esac
   done
   local dir; dir="$(cd "$p" 2>/dev/null && pwd)" || die "no such directory: $p"
   [ -n "$name" ] || name="$(basename "$dir")"
   require_local_layer
+  if [ -n "$effort" ]; then
+    [ -n "$(ws "w.forkEfforts?.[args[0]] ? 'y' : ''" "$effort")" ] \
+      || die "no such effort '$effort' (see: ./tsc-dev config forkEfforts)"
+  fi
   node -e '
-const fs=require("fs");const [file,name,dir,watch]=process.argv.slice(1);
+const fs=require("fs");const [file,name,dir,watch,effort]=process.argv.slice(1);
 const c=JSON.parse(fs.readFileSync(file,"utf8"));
 c.playgrounds=c.playgrounds||{};
-c.playgrounds[name]={path:dir,watch:watch?watch.split(",").filter(Boolean):undefined,dev:false};
+const entry={path:dir};
+if(effort)entry.effort=effort;
+if(watch)entry.watch=watch.split(",").filter(Boolean);
+entry.dev=c.playgrounds[name]?.dev??false;
+c.playgrounds[name]=entry;
 fs.writeFileSync(file,JSON.stringify(c,null,2)+"\n");
-' "$LOCAL_CONFIG" "$name" "$dir" "$watch"
+' "$LOCAL_CONFIG" "$name" "$dir" "$watch" "$effort"
   echo "✓ registered playground '$name' → $dir"
-  echo "  linked packages:"
-  yalc_lock_pkgs "$dir" | sed 's/^/    /'
-  echo "  would watch: $(playground_watch_repos "$name" "$dir" | tr '\n' ' ')"
+  playground_watch_explain "$name" | sed 's/^/  /'
   echo "  ./tsc-dev playground start $name"
 }
 
@@ -527,12 +531,15 @@ playground_start() {
   while [ $# -gt 0 ]; do case "$1" in --dev) dev=1; shift ;; *) die "unknown argument '$1'" ;; esac; done
   local dir; dir="$(playground_dir "$name")"
   echo "▶ playground '$name' → $dir"
+  echo "  $(playground_watch_explain "$name" | head -1)"
   local repo
+  # Idempotent: already-running watchers are left alone, so re-running this
+  # after adding a repo to the effort starts just the new one.
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     have "$repo" || { echo "  ⚠ $repo is not cloned — skipping"; continue; }
     start_daemon "watch-$repo" node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" push "$repo"
-  done < <(playground_watch_repos "$name" "$dir")
+  done < <(playground_watch_repos "$name")
   if [ "$dev" = 1 ] || [ "$(ws "(w.playgrounds?.[args[0]]||{}).dev" "$name")" = "true" ]; then
     start_daemon "dev-$name" "$ROOT/tsc-dev" dev "$dir" --local
   fi
@@ -543,19 +550,42 @@ playground_status() {
   local name="${1:-$(default_playground)}" dir key
   dir="$(playground_dir "$name")"
   echo "• playground '$name' → ${dir/#$HOME/~}"
-  if [ ! -d "$RUN_DIR" ]; then echo "  (no daemons started)"; return 0; fi
+  echo "  $(playground_watch_explain "$name" | head -1)"
+  local wanted; wanted="$(playground_watch_repos "$name" | tr '\n' ' ')"
   local found=0
-  for f in "$RUN_DIR"/*.pid; do
-    [ -e "$f" ] || continue
-    key="$(basename "$f" .pid)"
-    found=1
-    if daemon_alive "$key"; then
-      printf '  ▶ %-28s pid %-8s %s\n' "$key" "$(cat "$f")" "$(tail -1 "$(daemon_logfile "$key")" 2>/dev/null | cut -c1-60)"
-    else
-      printf '  ✗ %-28s dead (stale pid %s)\n' "$key" "$(cat "$f")"
-    fi
-  done
+  if [ -d "$RUN_DIR" ]; then
+    for f in "$RUN_DIR"/*.pid; do
+      [ -e "$f" ] || continue
+      key="$(basename "$f" .pid)"
+      found=1
+      if daemon_alive "$key"; then
+        printf '  ▶ %-28s pid %-8s %s\n' "$key" "$(cat "$f")" "$(tail -1 "$(daemon_logfile "$key")" 2>/dev/null | cut -c1-56)"
+      else
+        printf '  ✗ %-28s dead (stale pid %s)\n' "$key" "$(cat "$f")"
+      fi
+    done
+  fi
   [ "$found" = 1 ] || echo "  (no daemons started)"
+  # Drift both ways: the effort can gain repos (start them) or lose repos
+  # (their watcher is now pointless). Both happen during a long-lived effort.
+  local repo missing="" orphan=""
+  for repo in $wanted; do
+    daemon_alive "watch-$repo" || missing="$missing $repo"
+  done
+  if [ -d "$RUN_DIR" ]; then
+    for f in "$RUN_DIR"/*.pid; do
+      [ -e "$f" ] || continue
+      key="$(basename "$f" .pid)"
+      case "$key" in
+        watch-*)
+          repo="${key#watch-}"
+          case " $wanted " in *" $repo "*) ;; *) orphan="$orphan $repo" ;; esac ;;
+      esac
+    done
+  fi
+  [ -n "$missing" ] && echo "  ⚠ no watcher for:$missing  — ./tsc-dev playground start $name"
+  [ -n "$orphan" ] && echo "  ⚠ watching repos no longer in the set:$orphan  — ./tsc-dev playground restart $name"
+  return 0
 }
 
 playground_stop() {
