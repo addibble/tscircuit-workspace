@@ -43,6 +43,8 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `push <repo>` | rebuild + `yalc push` to all consumers |
 | `rebuild <repo...>` | link local deps + build + push, **in order** (propagate a change up the chain) |
 | `rebuild --from <repo>` | same, but the chain is **computed** from `workspace.json`'s bundling graph |
+| `watch <repo>` | rebuild + push that repo on every source change (debounced) |
+| `playground <init\|start\|status\|logs\|stop>` | manage a test project and its daemons |
 | `doctor [target...]` | audit yalc links (unstamped versions, npm copies that overwrote a link, stale links) |
 | `prune-store [--keep N]` | delete old `-local.*` builds from the yalc store |
 | `pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
@@ -215,6 +217,49 @@ package.json` is refused for that reason. A worktree must never `yalc publish`
 into the shared `~/.yalc` store, which would replace the build your feature
 environment is running on; `./tsc-dev pr-link` uses a private store inside the
 worktree instead.
+
+## Testing changes in a playground (and what to rebuild)
+
+A *playground* is an ordinary circuit project outside this workspace (e.g.
+`../tsc-playground`) with yalc links into it. Register it once, then let
+watchers keep it current:
+
+```bash
+./tsc-dev playground init ../tsc-playground --watch core,create-fdm-enclosure
+./tsc-dev playground start            # watchers rebuild + push on every save
+./tsc-dev playground status           # works from any shell, or a later session
+./tsc-dev playground logs watch-core
+./tsc-dev playground stop             # ALWAYS stop when you finish
+```
+
+Daemons are `nohup`ed with a pid and a log in `.run/`, so they **outlive the
+session that started them**. An agent that starts them must stop them before
+finishing, or the next session inherits builds it did not start. `status` is the
+way to find out what a previous session left running.
+
+`watch <repo>` drives that repo's **own** `bun run build` through `push`, so
+nothing has to be added to any repo's package.json — this stays working without
+anything being upstreamed.
+
+### Rebuild only what the path you are testing needs
+
+Measured on this workspace: a full `circuit-json → … → tscircuit` chain is
+~380s, and **runframe alone is 314s of it** (two full vite bundles). Almost
+nothing else exceeds 25s. But the Node path does not need runframe at all:
+`eval`'s node entry and the `tscircuit` umbrella both keep `@tscircuit/core`
+**external**, resolving it from `node_modules` at runtime.
+
+| Testing | Rebuild | Cost |
+|---|---|---|
+| circuit JSON, exports, `tsci build`, tests | the edited package only (`push`, or let the watcher do it) | **~10-20s** |
+| browser preview (`tsci dev`) | + `eval` + `runframe` (the standalone bundle inlines the worker, which inlines core) | ~6 min |
+
+Verified end to end: editing `core`, with only `push core`, changes the circuit
+JSON that `bin/tsci build` produces in the playground. Do not rebuild the whole
+chain reflexively — it is 20x slower and hides which level actually mattered.
+
+Use `bin/tsci` (the CLI from source) or the playground's own `bunx tsci`; both
+resolve core from `node_modules`, so both see a `push`ed change immediately.
 
 ## Local build versions (never hand-edit `version`)
 

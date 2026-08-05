@@ -62,6 +62,8 @@ commands. Common ones:
 | `./tsc-dev link <consumer> <dep>` | `yalc add` the dep's package into the consumer |
 | `./tsc-dev push <repo>` | rebuild + `yalc push` to every consumer using it |
 | `./tsc-dev watch <repo>` | `yalc publish --watch` (republish on change) |
+| `./tsc-dev watch <repo>` | rebuild + `yalc push` that repo on every source change (debounced) |
+| `./tsc-dev playground <sub>` | register a test project and manage its watcher/dev-server daemons |
 | `./tsc-dev unlink <consumer>` | `yalc remove --all` + `bun install` (restore npm versions) |
 | `./tsc-dev doctor [target...]` | audit yalc links: unstamped versions, npm copies that overwrote a link, stale links |
 | `./tsc-dev prune-store [--keep N]` | delete old `-local.*` builds from the yalc store (released versions untouched) |
@@ -456,6 +458,73 @@ peer) before checking out the SHA.
 exit 1) from **warnings** (uncommitted changes, extra repos or links — exit 0),
 because a yalc link rewrites `package.json` and so a dirty tree is the normal
 working state here, not a discrepancy.
+
+## Playgrounds: keeping a test project current
+
+A playground is an ordinary circuit project outside this workspace with yalc
+links into it. Register it once; watchers then keep it current on every save.
+
+```bash
+./tsc-dev playground init ../tsc-playground --watch core,create-fdm-enclosure
+./tsc-dev playground start [--dev]     # --dev also starts `tsc-dev dev --local`
+./tsc-dev playground status            # from any shell, in any later session
+./tsc-dev playground logs watch-core
+./tsc-dev playground stop
+```
+
+With no `--watch`, the repos to watch are derived from the playground's own
+`yalc.lock` — every linked package that is also cloned here.
+
+`watch` drives each repo's **own** `bun run build` through `push` (build, stamp,
+propagate). Nothing is added to any repo's `package.json`, so none of this
+depends on a change being accepted upstream.
+
+Daemons are `nohup`ed with a pid and log in `.run/`, so they survive the shell
+— and the agent session — that started them. That is the point (a later session
+can `status`/`stop` them), but it also means **whoever starts them must stop
+them**.
+
+### A watcher must not react to its own build
+
+The first run of this exposed three self-trigger loops within seconds: `tsup`
+writes `tsup.config.bundled_*.mjs` beside its config, `push` stamps and restores
+`package.json`, and `yalc push` rewrites `yalc.lock` — each retriggering the
+build that wrote it. Those paths are excluded (with tests, in
+`test/watch-run.test.ts`), and the watcher debounces, serializes runs, and keeps
+at most one queued.
+
+The trade-off: a genuine `package.json` edit no longer retriggers a build.
+Restart the watcher after one. A missed rebuild is cheap and visible; an
+infinite rebuild loop burns a core until noticed.
+
+### Rebuild only what the path you are testing needs
+
+Measured here, rebuilding the whole chain takes ~380s — and **runframe is 314s
+of it** (two full vite bundles). Nothing else exceeds 25s; `core` builds in 10s
+and the yalc copy costs 0.6s.
+
+The Node path does not need runframe: `eval`'s node entry and the `tscircuit`
+umbrella keep `@tscircuit/core` **external** and resolve it from `node_modules`.
+Only the browser preview needs the standalone bundle, because that inlines the
+eval worker, which inlines core.
+
+| Testing | Rebuild | Cost |
+|---|---|---|
+| circuit JSON, exports, `tsci build`, tests | the edited package only | **~10-20s** |
+| browser preview (`tsci dev`) | + `eval` + `runframe` | ~6 min |
+
+Verified with a probe: editing `core` and pushing **only** `core` changed the
+circuit JSON produced in the playground, via both `bin/tsci` and the
+playground's own `bunx tsci`.
+
+### Does yalc do live linking?
+
+No. `yalc link` symlinks `node_modules/<pkg>` to `.yalc/<pkg>`, which is a
+*snapshot copied from the store* — tested directly: editing the source without
+republishing leaves the consumer on the old code. Every yalc mode publishes
+built output, so yalc can shorten the copy, not the build. Since the copy is
+0.6s of an 11s cycle, the watcher (which removes the manual step, not the build)
+is the practical answer.
 
 ## Local build versions
 

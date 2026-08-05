@@ -24,7 +24,15 @@
 #   ./tsc-dev search <pattern> [..]   ripgrep across every cloned repo (passes extra args to rg)
 #   ./tsc-dev install [repo ...]      `bun install` in the given repos (default: all cloned)
 #   ./tsc-dev publish <repo>          Build <repo> (if it has a build script) and `yalc publish`
-#   ./tsc-dev watch <repo>            Same as publish, but keeps republishing on change (yalc --watch)
+#   ./tsc-dev watch <repo>            Rebuild <repo> and push to its consumers on every source change
+#                                     (debounced; drives the repo's own build, nothing is added to it)
+#   ./tsc-dev playground <sub>        Manage a circuit project you test against, and its daemons:
+#                                       init <path> [--name n] [--watch a,b]  register it
+#                                       start [name] [--dev]   watchers (+ dev server with --dev)
+#                                       status [name]          what is running, from any shell
+#                                       logs <daemon> [lines]  tail a daemon's log
+#                                       stop | restart         daemons survive an agent session, so
+#                                                              stop them explicitly when done
 #   ./tsc-dev link <consumer> <dep>   In <consumer>, `yalc add` the package provided by <dep> repo
 #   ./tsc-dev push <repo>             Rebuild <repo> and `yalc push` to every consumer using it
 #   ./tsc-dev unlink <consumer>       Remove all yalc links from <consumer> and restore npm versions
@@ -381,17 +389,203 @@ cmd_publish() {
 
 do_watch() {
   local repo="$1"
-  has_build "$repo" && (cd "$ROOT/$repo" && bun run build) || true
-  echo "▶ yalc publish --watch ($repo). NOTE: rebuild manually if it has a build step."
-  (cd "$ROOT/$repo" && yalc publish --watch)
+  # Drive the repo's OWN build through `push` (build + stamp + propagate), so
+  # nothing has to be added to any repo's package.json for this to work.
+  exec node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" push "$repo"
 }
 
 cmd_watch() {
   local repo="${1:?usage: watch <repo>}"
   have "$repo" || die "repo '$repo' is not cloned"
-  # The stamp is held for the whole watch session (one version for the session,
-  # republished in place on each change) and released by the trap on Ctrl-C.
-  with_dev_version "$repo" do_watch "$repo"
+  echo "▶ watching $repo — rebuilds and pushes to every consumer on change (Ctrl-C to stop)"
+  do_watch "$repo"
+}
+
+# ---------------------------------------------------------------------------
+# Playgrounds
+#
+# A playground is a normal circuit project (outside this workspace) with yalc
+# links into it. What was missing was lifecycle: which repos to watch, how to
+# start the watchers and the dev server, and how to stop them again in a later
+# session. Daemons are recorded in .run/ with a pid and a log, so `status` and
+# `stop` work from a fresh shell — or a fresh agent context — that never saw
+# them start.
+#
+# Registration lives in the USER layer (.local/workspace.local.json), because
+# which project you point at is yours, not the project's.
+# ---------------------------------------------------------------------------
+RUN_DIR="$ROOT/.run"
+
+playground_path() { ws "(w.playgrounds?.[args[0]]||{}).path" "$1"; }
+
+playground_names() { ws "Object.keys(w.playgrounds||{})"; }
+
+default_playground() {
+  local n; n="$(playground_names | head -1)"
+  [ -n "$n" ] || die "no playground registered — run: ./tsc-dev playground init <path>"
+  echo "$n"
+}
+
+# Resolve a playground name to an absolute directory.
+playground_dir() {
+  local name="$1" p
+  p="$(playground_path "$name")"
+  [ -n "$p" ] || die "unknown playground '$name' (./tsc-dev playground list)"
+  case "$p" in /*) echo "$p" ;; *) (cd "$ROOT/$p" 2>/dev/null && pwd) || die "playground path not found: $p" ;; esac
+}
+
+# Which repos should be watched for a playground: the configured list, or every
+# cloned repo whose package the playground actually links.
+playground_watch_repos() {
+  local name="$1" dir="$2" configured
+  configured="$(ws "(w.playgrounds?.[args[0]]||{}).watch" "$name" 2>/dev/null)"
+  if [ -n "$configured" ]; then echo "$configured"; return 0; fi
+  local pkg repo
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    repo="$(repo_for_pkg "$pkg")"
+    [ -n "$repo" ] && echo "$repo"
+  done < <(yalc_lock_pkgs "$dir")
+}
+
+daemon_pidfile() { echo "$RUN_DIR/$1.pid"; }
+daemon_logfile() { echo "$RUN_DIR/$1.log"; }
+
+daemon_alive() {
+  local pid; pid="$(cat "$(daemon_pidfile "$1")" 2>/dev/null || echo)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+start_daemon() {
+  local key="$1"; shift
+  mkdir -p "$RUN_DIR"
+  if daemon_alive "$key"; then echo "  ✓ $key already running (pid $(cat "$(daemon_pidfile "$key")"))"; return 0; fi
+  local log; log="$(daemon_logfile "$key")"
+  # nohup + disown so the daemon outlives this shell, and therefore this agent
+  # session; the pid file is how a later session finds it again.
+  nohup "$@" >>"$log" 2>&1 &
+  local pid=$!
+  disown 2>/dev/null || true
+  echo "$pid" > "$(daemon_pidfile "$key")"
+  sleep 0.3
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "  ▶ started $key (pid $pid) → .run/$key.log"
+  else
+    echo "  ✗ $key exited immediately — see .run/$key.log"
+    tail -3 "$log" | sed 's/^/      /'
+    rm -f "$(daemon_pidfile "$key")"
+    return 1
+  fi
+}
+
+stop_daemon() {
+  local key="$1" pid
+  pid="$(cat "$(daemon_pidfile "$key")" 2>/dev/null || echo)"
+  if [ -z "$pid" ]; then echo "  · $key not running"; return 0; fi
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    # give it a moment, then insist
+    sleep 0.4
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    echo "  ■ stopped $key (pid $pid)"
+  else
+    echo "  · $key was not running (stale pid $pid)"
+  fi
+  rm -f "$(daemon_pidfile "$key")"
+}
+
+playground_init() {
+  local p="${1:?usage: playground init <path> [--name <name>] [--watch repo,repo]}"; shift || true
+  local name="" watch=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name="${2:?}"; shift 2 ;;
+      --watch) watch="${2:?}"; shift 2 ;;
+      *) die "unknown argument '$1'" ;;
+    esac
+  done
+  local dir; dir="$(cd "$p" 2>/dev/null && pwd)" || die "no such directory: $p"
+  [ -n "$name" ] || name="$(basename "$dir")"
+  require_local_layer
+  node -e '
+const fs=require("fs");const [file,name,dir,watch]=process.argv.slice(1);
+const c=JSON.parse(fs.readFileSync(file,"utf8"));
+c.playgrounds=c.playgrounds||{};
+c.playgrounds[name]={path:dir,watch:watch?watch.split(",").filter(Boolean):undefined,dev:false};
+fs.writeFileSync(file,JSON.stringify(c,null,2)+"\n");
+' "$LOCAL_CONFIG" "$name" "$dir" "$watch"
+  echo "✓ registered playground '$name' → $dir"
+  echo "  linked packages:"
+  yalc_lock_pkgs "$dir" | sed 's/^/    /'
+  echo "  would watch: $(playground_watch_repos "$name" "$dir" | tr '\n' ' ')"
+  echo "  ./tsc-dev playground start $name"
+}
+
+playground_start() {
+  local name="${1:-$(default_playground)}" dev=0
+  shift 2>/dev/null || true
+  while [ $# -gt 0 ]; do case "$1" in --dev) dev=1; shift ;; *) die "unknown argument '$1'" ;; esac; done
+  local dir; dir="$(playground_dir "$name")"
+  echo "▶ playground '$name' → $dir"
+  local repo
+  while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    have "$repo" || { echo "  ⚠ $repo is not cloned — skipping"; continue; }
+    start_daemon "watch-$repo" node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" push "$repo"
+  done < <(playground_watch_repos "$name" "$dir")
+  if [ "$dev" = 1 ] || [ "$(ws "(w.playgrounds?.[args[0]]||{}).dev" "$name")" = "true" ]; then
+    start_daemon "dev-$name" "$ROOT/tsc-dev" dev "$dir" --local
+  fi
+  echo "  ./tsc-dev playground status $name"
+}
+
+playground_status() {
+  local name="${1:-$(default_playground)}" dir key
+  dir="$(playground_dir "$name")"
+  echo "• playground '$name' → ${dir/#$HOME/~}"
+  if [ ! -d "$RUN_DIR" ]; then echo "  (no daemons started)"; return 0; fi
+  local found=0
+  for f in "$RUN_DIR"/*.pid; do
+    [ -e "$f" ] || continue
+    key="$(basename "$f" .pid)"
+    found=1
+    if daemon_alive "$key"; then
+      printf '  ▶ %-28s pid %-8s %s\n' "$key" "$(cat "$f")" "$(tail -1 "$(daemon_logfile "$key")" 2>/dev/null | cut -c1-60)"
+    else
+      printf '  ✗ %-28s dead (stale pid %s)\n' "$key" "$(cat "$f")"
+    fi
+  done
+  [ "$found" = 1 ] || echo "  (no daemons started)"
+}
+
+playground_stop() {
+  local key
+  if [ ! -d "$RUN_DIR" ]; then echo "no daemons running"; return 0; fi
+  for f in "$RUN_DIR"/*.pid; do
+    [ -e "$f" ] || continue
+    stop_daemon "$(basename "$f" .pid)"
+  done
+}
+
+playground_logs() {
+  local key="${1:?usage: playground logs <daemon>   (see: playground status)}"
+  local log; log="$(daemon_logfile "$key")"
+  [ -f "$log" ] || die "no log for '$key' (./tsc-dev playground status)"
+  tail -${2:-30} "$log"
+}
+
+cmd_playground() {
+  local sub="${1:-status}"; shift 2>/dev/null || true
+  case "$sub" in
+    init)    playground_init "$@" ;;
+    start)   playground_start "$@" ;;
+    stop)    playground_stop ;;
+    restart) playground_stop; playground_start "$@" ;;
+    status)  playground_status "$@" ;;
+    logs)    playground_logs "$@" ;;
+    list)    playground_names | sed 's/^/  /' ;;
+    *) die "usage: playground <init|start|stop|restart|status|logs|list>" ;;
+  esac
 }
 
 cmd_link() {
@@ -1479,6 +1673,7 @@ main() {
     config)   cmd_config "$@" ;;
     freeze)   cmd_freeze "$@" ;;
     env)      cmd_env "$@" ;;
+    playground) cmd_playground "$@" ;;
     gen-map)  cmd_gen_map "$@" ;;
     test)     cmd_test "$@" ;;
     pr-list)  cmd_pr_list "$@" ;;
