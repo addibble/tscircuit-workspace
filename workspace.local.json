@@ -23,5 +23,15 @@
         "skill"
       ]
     }
+  },
+  "playgrounds": {
+    "tsc-playground": {
+      "path": "/Users/drew/src/tsc-playground",
+      "watch": [
+        "core",
+        "create-fdm-enclosure"
+      ],
+      "dev": false
+    }
   }
 }
