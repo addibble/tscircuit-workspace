@@ -49,15 +49,29 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `pr-check <repo> <branch>` | run the PR gates CI runs, derived from that repo's workflows |
 | `pr-push <repo> <branch>` | push to your fork (or origin) and open the PR |
 | `fork <repo...>` | create your fork and wire it up as the `fork` remote |
+| `local <init\|save\|sync\|status>` | manage your config layer (orphan branch, pushed to your fork) |
+| `config [key]` | effective merged config + which layer each key came from |
+| `freeze` | snapshot this build environment into your layer |
+| `env <add\|show\|diff\|adopt>` | read and reproduce a peer's build environment |
 | `dev [file]` | run the CLI dev server **from source** |
 | `unlink <consumer>` | `yalc remove --all` + `bun install` (restore npm versions) |
 | `status` | list cloned repos, package names, active yalc links |
 
 ## Repo layout & discovery
 
-- **`workspace.json` is the shared config** — clone groups, the build-time
-  bundling graph, and the fork/patch-set efforts. Add a group or a bundling edge
-  there, not in `tsc-dev`. `MAP.md` is the prose companion for humans.
+- **Configuration comes in two layers.** `workspace.json` is **shared** (clone
+  groups, the build-time bundling graph, the default clone set) and lives on
+  `main`. `.local/workspace.local.json` is **yours** (your patch-set effort,
+  personal overrides, the environment lock); it is deep-merged over the shared
+  file and wins, and is versioned on an orphan branch pushed only to your fork.
+  Decide by asking *would every developer's copy hold the same value?* — shared
+  if yes, local if no. `./tsc-dev config` shows the merge and each key's origin,
+  and warns when a user-specific key is still in the shared file.
+- A build environment is shareable: `./tsc-dev freeze` snapshots every cloned
+  repo's remote/branch/SHA plus the yalc links into your layer, and a colleague
+  reproduces it with `./tsc-dev env adopt <owner> --into <dir>`. The lock records
+  each branch's remote **URL**, so fork-based patch sets reproduce as forks
+  rather than silently falling back to upstream.
 - The org has ~300 active repos. **Clone deliberately** — see `MAP.md` for the
   ~80 that matter, grouped by function.
 - `.tscircuit-repos.txt` caches active org repo names (used to validate

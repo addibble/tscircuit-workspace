@@ -48,9 +48,33 @@
 #                                     can't drift out of a hand-maintained list.
 #   ./tsc-dev pr-push <repo> <br>     Push the worktree's branch to your fork (or to origin if you
 #                                     have write access) and open the PR against tscircuit/<repo>.
-#   ./tsc-dev fork <repo...>          Create your fork of each repo and wire it up as the `fork`
-#                                     remote, keeping origin pointed at tscircuit. --org <org> forks
-#                                     into an organization. No-op if you already have push access.
+#   ./tsc-dev local <sub>             Manage YOUR config layer — a worktree in .local/ on an orphan
+#                                     branch (user/<login>) that is pushed only to your fork:
+#                                       init [--remote <url>]  create it (migrating user-specific keys
+#                                                              out of the shared workspace.json)
+#                                       save [-m msg]          commit + push to your fork
+#                                       sync                   fast-forward from your fork
+#                                       status                 branch, remote, config, lock
+#                                       remote <git-url>       set the workspace fork remote
+#   ./tsc-dev config [key]            Effective (merged) config, and which layer each key came from
+#   ./tsc-dev freeze [-o <file>]      Snapshot this build environment — every cloned repo's
+#                                     remote/branch/SHA plus the yalc links — into the user layer
+#   ./tsc-dev env <sub>               Peer environments, read from their workspace fork:
+#                                       add <owner> [git-url]  register their fork as a remote
+#                                       list                   registered peers
+#                                       show <owner>           their locked environment
+#                                       diff <owner>           how yours differs from theirs
+#                                       adopt <owner> --into <dir> | --here    reproduce it
+#
+# CONFIG LAYERS: workspace.json is SHARED (clone groups, the bundling graph, the
+# default clone set — the same in everyone's copy, committed to main).
+# .local/workspace.local.json is YOURS (which patch-set effort you are running,
+# personal overrides, the environment lock); it is deep-merged over the shared
+# file and wins. The local layer is versioned on an ORPHAN branch — no shared
+# history with main, so it cannot be merged there by accident and a PR branched
+# from main can never drag it along — and pushed only to your fork. That is also
+# what makes environments shareable: `env adopt <owner>` reads a colleague's lock
+# straight off their fork and reproduces their checkout, fork remotes included.
 #   ./tsc-dev pr-link <repo> <br> <d> Link workspace repo <d> into the worktree via a PRIVATE yalc
 #                                     store, so it cannot disturb your feature environment's links.
 #   ./tsc-dev pr-list                 List PR worktrees and their commits ahead of upstream
@@ -69,6 +93,9 @@
 #                                     --local it serves YOUR locally-built runframe standalone
 #                                     (reflecting local core/eval/runframe changes); without it,
 #                                     the cli's installed (published) packages are used.
+#   ./tsc-dev fork <repo...>          Create your fork of each repo and wire it up as the `fork`
+#                                     remote, keeping origin pointed at tscircuit. --org <org> forks
+#                                     into an organization. No-op if you already have push access.
 #   ./tsc-dev pkgname <repo>          Print the npm package name a repo publishes
 #   ./tsc-dev status                  List cloned repos, their package names, and active yalc links
 #   ./tsc-dev sync-forks [repo...]    Update each fork to head of upstream main with your patches on
@@ -121,19 +148,19 @@ MANIFEST="$ROOT/workspace.json"          # shared config: groups, bundling graph
 ws() {
   [ -f "$MANIFEST" ] || die "missing $MANIFEST"
   local expr="$1"; shift
-  node -e 'const w=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));let o;try{o=eval(process.argv[2])}catch(e){process.stderr.write(String(e)+"\n");process.exit(3)}if(o==null)process.exit(0);process.stdout.write(Array.isArray(o)?o.join("\n"):String(o))' "$MANIFEST" "$expr" "$@"
+  node "$ROOT/bin/ws.mjs" "$ROOT" "$expr" "$@"
 }
 
 # Curated categories for `clone-group`, from workspace.json.
 group_repos() {
-  local repos; repos="$(ws "(w.groups[process.argv[3]]||{}).repos" "$1" 2>/dev/null | tr '\n' ' ')"
+  local repos; repos="$(ws "(w.groups[args[0]]||{}).repos" "$1" 2>/dev/null | tr '\n' ' ')"
   [ -n "${repos// /}" ] || return 1
   echo "$repos"
 }
 
 # The bottom-up rebuild order for a change in <from> (see bin/rebuild-chain.mjs).
 rebuild_chain() {
-  node "$ROOT/bin/rebuild-chain.mjs" "$MANIFEST" "$ROOT" "$1" ${2:+"$2"}
+  node "$ROOT/bin/rebuild-chain.mjs" "$ROOT" "$1" ${2:+"$2"}
 }
 
 # The default set for `clone`: the runtime rendering chain plus common leaves.
@@ -269,8 +296,8 @@ cmd_clone_group() {
     local name
     while IFS= read -r name; do
       [ -n "$name" ] || continue
-      printf '  %-12s %s\n' "$name" "$(ws "w.groups[process.argv[3]].description" "$name")"
-      printf '  %-12s   %s\n' "" "$(ws "w.groups[process.argv[3]].repos.join(' ')" "$name")"
+      printf '  %-12s %s\n' "$name" "$(ws "w.groups[args[0]].description" "$name")"
+      printf '  %-12s   %s\n' "" "$(ws "w.groups[args[0]].repos.join(' ')" "$name")"
     done < <(ws "Object.keys(w.groups)")
     echo "usage: ./tsc-dev clone-group <group>"; return 0
   fi
@@ -949,6 +976,301 @@ cmd_pr_push() {
   (cd "$dir" && gh pr create -R "tscircuit/$repo" --head "$head" ${draft:+$draft})
 }
 
+# ---------------------------------------------------------------------------
+# The user config layer, and peer environments
+#
+# workspace.json is SHARED: clone groups, the bundling graph, the default clone
+# set — the same values in every developer's copy, committed to main.
+#
+# .local/ is YOURS: a worktree on an ORPHAN branch (user/<login>) holding
+# workspace.local.json (deep-merged over the shared file, and it wins) and
+# workspace.lock.json (a snapshot of your whole build environment). It is
+# versioned and pushed to YOUR fork, never to main. An orphan branch shares no
+# history with main, so it cannot be fast-forwarded or merged into it by
+# accident, and a PR branched from main can never drag it along.
+#
+# Because that branch lives on a fork, pointing at a colleague's fork and reading
+# their lock is enough to reproduce their environment: `env adopt <owner>`.
+# ---------------------------------------------------------------------------
+LOCAL_DIR="$ROOT/.local"
+LOCAL_CONFIG="$LOCAL_DIR/workspace.local.json"
+LOCAL_LOCK="$LOCAL_DIR/workspace.lock.json"
+
+# Count the keys of a top-level object in a JSON file. Read with fs, never
+# `require`: require infers the module type from the extension, so it chokes on
+# a JSON payload in a temp file with no .json suffix.
+json_count() {
+  node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(String(Object.keys(j[process.argv[2]]||{}).length))}catch(e){process.stdout.write("?")}' "$1" "$2"
+}
+
+local_branch() {
+  local who
+  who="$(gh_user 2>/dev/null || true)"
+  [ -n "$who" ] || who="$(git config user.email 2>/dev/null | cut -d@ -f1)"
+  [ -n "$who" ] || who="local"
+  echo "user/$who"
+}
+
+require_local_layer() {
+  [ -d "$LOCAL_DIR" ] || die "no user layer yet — run: ./tsc-dev local init"
+}
+
+local_init() {
+  local remote_url=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --remote) remote_url="${2:?--remote needs a git URL}"; shift 2 ;;
+      *) die "unknown argument '$1'" ;;
+    esac
+  done
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 \
+    || die "the workspace itself is not a git repo (run: git init)"
+  local branch; branch="$(local_branch)"
+  if [ -d "$LOCAL_DIR" ]; then
+    echo "✓ user layer already present ($(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD))"
+  else
+    if ! git -C "$ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+      # Orphan branch via plumbing: an empty tree and a parentless commit. No
+      # checkout gymnastics, and no shared history with main by construction.
+      local empty commit
+      empty="$(git -C "$ROOT" hash-object -t tree /dev/null)"
+      commit="$(git -C "$ROOT" commit-tree "$empty" -m "Start user config layer")"
+      git -C "$ROOT" branch "$branch" "$commit"
+      echo "▶ created orphan branch $branch (no shared history with main)"
+    fi
+    git -C "$ROOT" worktree add --quiet "$LOCAL_DIR" "$branch"
+    echo "▶ user layer worktree: .local ($branch)"
+  fi
+  [ -n "$remote_url" ] && local_remote "$remote_url"
+  [ -f "$LOCAL_CONFIG" ] || node "$ROOT/bin/workspace-config.mjs" --seed "$ROOT" "$LOCAL_CONFIG"
+  echo "    ./tsc-dev config         # effective config + which layer each key came from"
+  echo "    ./tsc-dev freeze         # snapshot this build environment into the layer"
+  echo "    ./tsc-dev local save     # commit + push to your fork"
+}
+
+local_remote() {
+  local url="${1:?usage: local remote <git-url>}"
+  if git -C "$ROOT" remote | grep -qx fork; then
+    git -C "$ROOT" remote set-url fork "$url"
+  else
+    git -C "$ROOT" remote add fork "$url"
+  fi
+  echo "▶ workspace fork remote: $url"
+}
+
+local_save() {
+  local msg="Update user workspace layer"
+  [ "${1:-}" = "-m" ] && { msg="${2:?-m needs a message}"; shift 2; }
+  require_local_layer
+  git -C "$LOCAL_DIR" add -A
+  if git -C "$LOCAL_DIR" diff --cached --quiet; then
+    echo "✓ nothing to save"
+  else
+    git -C "$LOCAL_DIR" commit -q -m "$msg"
+    echo "▶ committed: $msg"
+  fi
+  local branch; branch="$(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)"
+  if git -C "$ROOT" remote | grep -qx fork; then
+    # Only ever your fork: this branch must never reach the shared repo.
+    if [ "$(git -C "$ROOT" remote get-url fork)" = "$(git -C "$ROOT" remote get-url origin 2>/dev/null || echo)" ]; then
+      die "'fork' and 'origin' point at the same URL — refusing to push a user branch upstream"
+    fi
+    git -C "$LOCAL_DIR" push -q -u fork "HEAD:refs/heads/$branch" && echo "▶ pushed $branch to fork"
+  else
+    echo "ℹ no 'fork' remote for the workspace repo — set one with:"
+    echo "    ./tsc-dev local remote git@github.com:<you>/<workspace-repo>.git"
+  fi
+}
+
+local_sync() {
+  require_local_layer
+  git -C "$ROOT" remote | grep -qx fork || die "no 'fork' remote (./tsc-dev local remote <git-url>)"
+  local branch; branch="$(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)"
+  git -C "$LOCAL_DIR" fetch fork --quiet || die "fetch failed"
+  if git -C "$LOCAL_DIR" merge --ff-only "fork/$branch" >/dev/null 2>&1; then
+    echo "✓ $branch up to date with fork"
+  else
+    echo "⚠ $branch could not fast-forward from fork/$branch — reconcile by hand"
+  fi
+}
+
+local_status() {
+  if [ ! -d "$LOCAL_DIR" ]; then echo "no user layer (./tsc-dev local init)"; return 0; fi
+  echo "• branch   $(git -C "$LOCAL_DIR" rev-parse --abbrev-ref HEAD)  ($(git -C "$LOCAL_DIR" rev-parse --short HEAD))"
+  echo "• remote   $(git -C "$ROOT" remote get-url fork 2>/dev/null || echo '(none — ./tsc-dev local remote <git-url>)')"
+  echo "• config   $([ -f "$LOCAL_CONFIG" ] && echo workspace.local.json || echo '(none)')"
+  if [ -f "$LOCAL_LOCK" ]; then
+    echo "• lock     workspace.lock.json ($(json_count "$LOCAL_LOCK" repos) repos)"
+  else
+    echo "• lock     (none — ./tsc-dev freeze)"
+  fi
+  local dirty; dirty="$(git -C "$LOCAL_DIR" status --porcelain)"
+  if [ -n "$dirty" ]; then echo "• unsaved:"; printf '%s\n' "$dirty" | sed 's/^/    /'; else echo "• clean (saved)"; fi
+}
+
+cmd_local() {
+  local sub="${1:-status}"; shift || true
+  case "$sub" in
+    init)   local_init "$@" ;;
+    save)   local_save "$@" ;;
+    sync)   local_sync "$@" ;;
+    remote) local_remote "$@" ;;
+    status) local_status ;;
+    *) die "usage: local <init|save|sync|status|remote>" ;;
+  esac
+}
+
+cmd_config() {
+  if [ $# -gt 0 ]; then ws "w[args[0]]" "$1"; echo; return 0; fi
+  node "$ROOT/bin/workspace-config.mjs" --explain "$ROOT"
+}
+
+cmd_freeze() {
+  local out="$LOCAL_LOCK"
+  [ "${1:-}" = "-o" ] && { out="${2:?-o needs a path}"; shift 2; }
+  [ "$out" = "$LOCAL_LOCK" ] && require_local_layer
+  node "$ROOT/bin/env-lock.mjs" capture "$ROOT" > "$out"
+  echo "✓ froze $(json_count "$out" repos) repos into ${out#$ROOT/}"
+  echo "    ./tsc-dev local save -m 'snapshot'   # version it on your fork"
+}
+
+# A peer's workspace fork, registered as a remote so their user branch (and the
+# lock on it) can be read without touching your own checkout.
+peer_remote() { echo "env-$1"; }
+
+peer_ref() {
+  local owner="$1" remote; remote="$(peer_remote "$owner")"
+  if git -C "$ROOT" show-ref --verify --quiet "refs/remotes/$remote/user/$owner"; then
+    echo "$remote/user/$owner"; return 0
+  fi
+  git -C "$ROOT" for-each-ref --format='%(refname:short)' "refs/remotes/$remote/user/*" 2>/dev/null | head -1
+}
+
+env_add() {
+  local owner="${1:?usage: env add <owner> [git-url]}" url="${2:-}"
+  [ -n "$url" ] || url="https://github.com/$owner/$(basename "$ROOT").git"
+  local remote; remote="$(peer_remote "$owner")"
+  if git -C "$ROOT" remote | grep -qx "$remote"; then
+    git -C "$ROOT" remote set-url "$remote" "$url"
+  else
+    git -C "$ROOT" remote add "$remote" "$url"
+  fi
+  git -C "$ROOT" fetch "$remote" --quiet || die "could not fetch $url"
+  local ref; ref="$(peer_ref "$owner")"
+  [ -n "$ref" ] || die "$owner publishes no user/* branch on $url"
+  echo "✓ $owner -> $url  (branch $ref)"
+}
+
+# Read a file out of a peer's branch without checking anything out.
+peer_file() {
+  local owner="$1" file="$2" ref; ref="$(peer_ref "$owner")"
+  [ -n "$ref" ] || die "unknown peer '$owner' — run: ./tsc-dev env add $owner [git-url]"
+  git -C "$ROOT" show "$ref:$file" 2>/dev/null
+}
+
+env_list() {
+  local r owner
+  for r in $(git -C "$ROOT" remote | grep '^env-' || true); do
+    owner="${r#env-}"
+    printf '• %-16s %-52s %s\n' "$owner" "$(git -C "$ROOT" remote get-url "$r")" "$(peer_ref "$owner")"
+  done
+}
+
+env_show() {
+  local owner="${1:?usage: env show <owner>}"
+  peer_file "$owner" "workspace.lock.json" | node "$ROOT/bin/env-lock.mjs" summarize -
+}
+
+env_diff() {
+  local owner="${1:?usage: env diff <owner>}" tmp rc=0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-lock.XXXXXX")"
+  peer_file "$owner" "workspace.lock.json" > "$tmp" || die "no lock on $owner's branch"
+  echo "▶ this checkout vs $owner's lock"
+  node "$ROOT/bin/env-lock.mjs" diff "$ROOT" "$tmp" || rc=$?
+  rm -f "$tmp"
+  return $rc
+}
+
+# Reproduce a peer's environment. --here mutates this workspace (skipping any
+# repo with uncommitted work); --into <dir> builds a fresh workspace instead,
+# which is the only way to get an exact copy without disturbing your own.
+env_adopt() {
+  local owner="" into="" here=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --into) into="${2:?--into needs a directory}"; shift 2 ;;
+      --here) here=1; shift ;;
+      -*) die "unknown flag '$1'" ;;
+      *) owner="$1"; shift ;;
+    esac
+  done
+  [ -n "$owner" ] || die "usage: env adopt <owner> [--here | --into <dir>]"
+  [ "$here" = 1 ] || [ -n "$into" ] \
+    || die "say where: --here (mutate this workspace) or --into <dir> (fresh copy)"
+
+  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-lock.XXXXXX")"
+  peer_file "$owner" "workspace.lock.json" > "$tmp" || die "no lock on $owner's branch"
+
+  local target="$ROOT"
+  if [ -n "$into" ]; then
+    [ -e "$into" ] && die "$into already exists"
+    echo "▶ cloning the workspace tooling into $into"
+    git clone --quiet "$ROOT" "$into"
+    target="$(cd "$into" && pwd)"
+  fi
+
+  local processed=0
+  local name branch sha remote url dir
+  while IFS=$'\t' read -r name branch sha remote url; do
+    [ -n "$name" ] || continue
+    processed=$((processed + 1))
+    dir="$target/$name"
+    if [ ! -d "$dir/.git" ]; then
+      echo "▶ cloning $name"
+      git clone --quiet "$ORG/$name" "$dir" || { echo "  ✗ clone failed"; continue; }
+    elif [ -n "$(git -C "$dir" status --porcelain)" ]; then
+      echo "  ⚠ $name has uncommitted changes — leaving it alone"
+      continue
+    fi
+    # A patch-set branch usually lives on the peer's fork, so add that remote
+    # verbatim; without it we would silently reproduce upstream instead.
+    if [ "$remote" != "origin" ] && [ -n "$url" ]; then
+      git -C "$dir" remote | grep -qx "$owner" || git -C "$dir" remote add "$owner" "$url"
+      git -C "$dir" fetch "$owner" --quiet || echo "  ⚠ fetch $owner failed for $name"
+    else
+      git -C "$dir" fetch origin --quiet || true
+    fi
+    if git -C "$dir" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+      git -C "$dir" checkout --quiet --detach "$sha" && echo "  ✓ $name @ ${sha:0:8} ($branch)"
+    else
+      echo "  ✗ $name: commit ${sha:0:8} not found on any remote (unpushed work?)"
+    fi
+  done < <(node -e 'const fs=require("fs");const l=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));for(const [n,r] of Object.entries(l.repos||{}))console.log([n,r.branch,r.sha,r.remote,r.remoteUrl].join("\t"))' "$tmp")
+
+  [ "$processed" -gt 0 ] || { rm -f "$tmp"; die "$owner's lock lists no repos (is workspace.lock.json valid?)"; }
+
+  if peer_file "$owner" "workspace.local.json" > "$target/.workspace.local.from-$owner.json" 2>/dev/null; then
+    echo "  ↳ their config layer saved as .workspace.local.from-$owner.json"
+  else
+    rm -f "$target/.workspace.local.from-$owner.json"
+  fi
+  rm -f "$tmp"
+  echo "✓ adopted $owner's environment in $target"
+  echo "    cd $target && ./tsc-dev install && ./tsc-dev env diff $owner"
+}
+
+cmd_env() {
+  local sub="${1:-list}"; shift || true
+  case "$sub" in
+    add)   env_add "$@" ;;
+    list)  env_list ;;
+    show)  env_show "$@" ;;
+    diff)  env_diff "$@" ;;
+    adopt) env_adopt "$@" ;;
+    *) die "usage: env <add|list|show|diff|adopt>" ;;
+  esac
+}
+
 # The repos carrying the active patch-set effort, and each one's branch — both
 # from workspace.json, so a second effort is a config change, not a code change.
 # Pick a different effort with SYNC_FORK_EFFORT.
@@ -957,7 +1279,7 @@ sync_fork_repos() {
 }
 
 sync_fork_branch_for() {
-  ws "(e=>e.branchOverrides?.[process.argv[3]]||e.defaultBranch)(w.forkEfforts[process.env.SYNC_FORK_EFFORT||w.defaultForkEffort])" "$1"
+  ws "(e=>e.branchOverrides?.[args[0]]||e.defaultBranch)(w.forkEfforts[process.env.SYNC_FORK_EFFORT||w.defaultForkEffort])" "$1"
 }
 
 # After a successful fork rebase+push, move the local branch onto the rewritten
@@ -1131,6 +1453,10 @@ main() {
     pr-push)  cmd_pr_push "$@" ;;
     pr-link)  cmd_pr_link "$@" ;;
     fork)     cmd_fork "$@" ;;
+    local)    cmd_local "$@" ;;
+    config)   cmd_config "$@" ;;
+    freeze)   cmd_freeze "$@" ;;
+    env)      cmd_env "$@" ;;
     pr-list)  cmd_pr_list "$@" ;;
     pr-rm)    cmd_pr_rm "$@" ;;
     rebuild) cmd_rebuild "$@" ;;

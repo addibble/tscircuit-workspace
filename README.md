@@ -19,6 +19,30 @@ See the official guides:
 
 ## The `tsc-dev` helper
 
+Configuration comes in two layers, with different homes and different git
+histories:
+
+| Layer | File | Lives on | Holds |
+|---|---|---|---|
+| **shared** | `workspace.json` | this repo's `main` | clone groups, the bundling graph, the default clone set |
+| **yours** | `.local/workspace.local.json` | orphan branch `user/<login>`, pushed to **your fork** | your patch-set effort, personal overrides, the environment lock |
+
+The local layer is deep-merged over the shared one and wins. The test for where
+a key belongs: *would every developer's copy hold the same value?* Shared if
+yes, local if no.
+
+```bash
+./tsc-dev local init --remote git@github.com:<you>/<workspace-repo>.git
+./tsc-dev config                 # effective config + which layer each key came from
+./tsc-dev local save -m "..."    # commit + push your layer to your fork
+```
+
+The local layer is an **orphan branch** — built from an empty tree with no
+parent, so it shares no history with `main`. It therefore cannot be
+fast-forwarded or merged into `main` by accident, and a PR branched from `main`
+can never drag it along. `local save` additionally refuses to push if `fork` and
+`origin` resolve to the same URL.
+
 `workspace.json` holds the shared configuration — the curated clone groups, the
 build-time **bundling graph** that `rebuild --from` walks, and the fork/patch-set
 efforts `sync-forks` updates. Add a group, a bundling edge or an effort there
@@ -358,6 +382,44 @@ access. `pr-push` also refuses to push a `package.json` that still contains
 machine-specific state. Per-developer facts belong in git remotes or git config.
 (`bin/tsci` hardcoded one developer's `/Users/.../src/tscircuit` and now derives
 the workspace root from its own location.)
+
+## Sharing a build environment
+
+"My build environment" here is not one commit: it is which repos are cloned,
+which **remote and branch** each is on (often a fork, for patch sets that aren't
+upstream yet), the exact SHA, and which yalc links are wired between them. That
+tuple is what makes two developers' `bun test` runs comparable.
+
+```bash
+./tsc-dev freeze                 # snapshot it into .local/workspace.lock.json
+./tsc-dev local save -m "snapshot: parametric-enclosures"
+```
+
+Because the lock rides on your user branch on your fork, anyone can reproduce it:
+
+```bash
+./tsc-dev env add addibble https://github.com/addibble/tscircuit-workspace.git
+./tsc-dev env show addibble       # their repos, branches, SHAs, fork URLs, links
+./tsc-dev env diff addibble       # how your checkout differs from theirs
+./tsc-dev env adopt addibble --into ~/src/tsc-addibble    # reproduce it
+```
+
+A peer's branch is read with `git show` — nothing of theirs is ever checked out
+over your work. `adopt --into <dir>` builds a **fresh** workspace (clone of the
+tooling + every locked repo at its locked SHA), which is the only way to get an
+exact copy without disturbing your own; `--here` mutates the current workspace
+and skips any repo with uncommitted changes.
+
+The critical detail is that the lock records each branch's **remote URL**, not
+just its name. Six of the repos here sit on `addibble/*` forks; without the URL,
+adopting would silently reproduce upstream instead and the difference wouldn't
+surface until a test failed. `adopt` adds that remote verbatim (named for the
+peer) before checking out the SHA.
+
+`env diff` separates **differences** (not cloned, wrong SHA, missing yalc link —
+exit 1) from **warnings** (uncommitted changes, extra repos or links — exit 0),
+because a yalc link rewrites `package.json` and so a dirty tree is the normal
+working state here, not a discrepancy.
 
 ## Local build versions
 

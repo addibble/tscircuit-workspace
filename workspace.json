@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared configuration for the tscircuit workspace. Read by ./tsc-dev; this is the single source of truth for what MAP.md documents in prose. Plain JSON (not JSONC) so `node -e` can read it with no dependency; explanatory text lives in `description` fields, which the tooling prints, rather than in comments nothing can see.",
+  "$comment": "SHARED configuration for the tscircuit workspace, committed to main: facts whose value is the same in every developer's copy. Anything that describes one developer's current work (which patch-set effort they are running, personal overrides) belongs in .local/workspace.local.json instead, which is versioned on an orphan branch pushed only to their fork and deep-merged over this file. Plain JSON (not JSONC) so `node -e` can read it with no dependency; explanatory text lives in `description` fields, which the tooling prints, rather than in comments nothing can see. See `./tsc-dev config` for the effective merge.",
 
   "defaultRepos": [
     "core",
@@ -52,27 +52,6 @@
       "runframe": ["eval", "3d-viewer", "pcb-viewer", "schematic-viewer", "circuit-to-svg", "circuit-json-to-gerber", "circuit-json-to-kicad"],
       "cli": ["runframe", "eval", "circuit-json-to-gltf"],
       "tscircuit": ["cli", "runframe", "eval", "core"]
-    }
-  },
-
-  "defaultForkEffort": "parametric-enclosures",
-  "forkEfforts": {
-    "parametric-enclosures": {
-      "description": "Repos carrying the parametric-enclosure patch set, in release order (see create-fdm-enclosure/README.md). Downstream rebuild-only repos (eval, runframe, cli) are excluded — they carry no patch branch. Override the effort with SYNC_FORK_EFFORT, or one branch for every repo with SYNC_FORK_BRANCH.",
-      "defaultBranch": "feat/parametric-enclosures",
-      "branchOverrides": {
-        "infer-cable-insertion-point": "fix/explicit-insertion-direction"
-      },
-      "repos": [
-        "circuit-json",
-        "props",
-        "create-fdm-enclosure",
-        "circuit-json-to-gltf",
-        "infer-cable-insertion-point",
-        "3d-viewer",
-        "core",
-        "rfc"
-      ]
     }
   }
 }

@@ -22,3 +22,9 @@
 # Machine-local state, regenerable — never shared:
 #   .tscircuit-repos.txt  cache of org repo names (refresh with gh, see AGENTS.md)
 #   .worktrees/           isolated PR worktrees created by `./tsc-dev pr`
+#
+# Versioned, but NOT here:
+#   .local/               your config layer + environment lock. A worktree on an
+#                         orphan branch (user/<login>) pushed to YOUR fork, so it
+#                         has its own history and can never land on main.
+#   .workspace.local.from-*.json   a peer's layer, saved by `env adopt`

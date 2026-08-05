@@ -8,8 +8,11 @@
 // level below it is rebuilt in order. This computes that order from the
 // `bundling.inlines` graph in workspace.json:
 //
-//   usage: rebuild-chain.mjs <manifest> <workspace-root> <from> [to]
+//   usage: rebuild-chain.mjs <workspace-root> <from> [to]
 //   prints one repo per line, dependencies first, including <from> itself.
+//
+// The graph comes from the LAYERED config, so a developer can add or correct an
+// edge in their own .local layer without touching the shared file.
 //
 // Manifest edges are advisory and deliberately a superset of literal inlining;
 // each is verified here against the consumer's actual package.json, so an edge
@@ -17,14 +20,15 @@
 // pointless rebuild. Repos that are not cloned are skipped entirely.
 import fs from "node:fs"
 import path from "node:path"
+import { loadConfig } from "./workspace-config.mjs"
 
-const [manifestPath, root, from, to] = process.argv.slice(2)
-if (!manifestPath || !root || !from) {
-  console.error("usage: rebuild-chain.mjs <manifest> <workspace-root> <from> [to]")
+const [root, from, to] = process.argv.slice(2)
+if (!root || !from) {
+  console.error("usage: rebuild-chain.mjs <workspace-root> <from> [to]")
   process.exit(2)
 }
 
-const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+const manifest = loadConfig(root)
 const inlines = manifest.bundling?.inlines ?? {}
 
 const pkg = (repo) => {
