@@ -48,18 +48,28 @@ const branchRemote = (dir, branch) => {
 
 const captureRepo = (root, name) => {
   const dir = path.join(root, name)
+  const sha = git(dir, "rev-parse", "HEAD")
+  // An initialised-but-empty repo (unborn HEAD) carries no reproducible state.
+  if (!sha) return null
   const branch = git(dir, "rev-parse", "--abbrev-ref", "HEAD")
   const remote = branchRemote(dir, branch)
   const remotes = {}
   for (const r of git(dir, "remote").split("\n").filter(Boolean)) {
     remotes[r] = git(dir, "remote", "get-url", r)
   }
+  // Where an adopter should clone from. Prefer origin; fall back to whichever
+  // remote the branch tracks (some repos here exist only as a personal fork).
+  const cloneUrl = remotes.origin || remotes[remote] || ""
   return {
     branch: branch === "HEAD" ? "(detached)" : branch,
-    sha: git(dir, "rev-parse", "HEAD"),
+    sha,
     // the remote the branch tracks, plus its URL, so a peer can add it verbatim
     remote: remote || "origin",
     remoteUrl: remotes[remote || "origin"] ?? "",
+    cloneUrl,
+    // No publishable remote at all: real for scratch repos, and honest to say
+    // so rather than emitting a URL an adopter cannot fetch.
+    local: cloneUrl === "",
     remotes,
     dirty: git(dir, "status", "--porcelain") !== "",
   }
@@ -84,9 +94,14 @@ const captureLinks = (root, repos) => {
 
 const capture = (root) => {
   const repos = clonedRepos(root)
+  const captured = {}
+  for (const name of repos) {
+    const info = captureRepo(root, name)
+    if (info) captured[name] = info // skips empty repos with an unborn HEAD
+  }
   const out = {
     $comment:
-      "Snapshot of a build environment: every cloned repo's remote/branch/SHA plus the yalc links between them. " +
+      "Snapshot of a build environment: every cloned repo's clone URL, branch and SHA plus the yalc links between them. " +
       "Reproduce with `./tsc-dev env adopt <owner>`. Regenerate with `./tsc-dev freeze`.",
     generatedAt: new Date().toISOString(),
     tool: {
@@ -94,8 +109,8 @@ const capture = (root) => {
       bun: run("bun", ["--version"]),
       node: process.version,
     },
-    repos: Object.fromEntries(repos.map((r) => [r, captureRepo(root, r)])),
-    links: captureLinks(root, repos),
+    repos: captured,
+    links: captureLinks(root, Object.keys(captured)),
   }
   return out
 }
@@ -120,8 +135,16 @@ export const compareEnvironments = (lock, here) => {
 
   for (const [name, want] of Object.entries(lock.repos ?? {})) {
     const got = here.repos?.[name]
+    // A repo with no publishable remote cannot be reproduced by anyone else.
+    // Say so once, as a warning, instead of demanding a commit they can't fetch.
+    if (want.local && !got) {
+      warnings.push(`${name}: local-only in the lock (no remote) — cannot be reproduced`)
+      continue
+    }
     if (!got) {
-      problems.push(`${name}: not cloned (want ${want.branch} @ ${want.sha.slice(0, 8)} from ${want.remoteUrl})`)
+      problems.push(
+        `${name}: not cloned (want ${want.branch} @ ${want.sha.slice(0, 8)} from ${want.cloneUrl || want.remoteUrl})`,
+      )
       continue
     }
     if (got.sha !== want.sha) {

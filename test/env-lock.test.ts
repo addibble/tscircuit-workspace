@@ -70,3 +70,22 @@ test("comparison tolerates a lock with no links or repos", () => {
   expect(() => compareEnvironments({}, {})).not.toThrow()
   expect(compareEnvironments({}, {}).problems).toEqual([])
 })
+
+test("a local-only repo is a warning, not an unmeetable demand", () => {
+  // Scratch repos with no remote exist in a long-lived workspace. Demanding a
+  // commit nobody can fetch would make every adopter's diff permanently red.
+  const lock = { repos: { scratch: repo({ local: true, cloneUrl: "", remoteUrl: "" }) } }
+  const { problems, warnings } = compareEnvironments(lock, { repos: {} })
+  expect(problems).toEqual([])
+  expect(warnings[0]).toContain("cannot be reproduced")
+})
+
+test("a missing repo names the clone URL, which may not be the org's", () => {
+  const lock = {
+    repos: {
+      "pcb-enclosure": repo({ cloneUrl: "https://github.com/addibble/pcb-enclosure.git", remote: "fork" }),
+    },
+  }
+  const { problems } = compareEnvironments(lock, { repos: {} })
+  expect(problems[0]).toContain("addibble/pcb-enclosure")
+})

@@ -1222,14 +1222,20 @@ env_adopt() {
   fi
 
   local processed=0
-  local name branch sha remote url dir
-  while IFS=$'\t' read -r name branch sha remote url; do
+  local name branch sha remote url clone_url is_local dir
+  while IFS=$'\t' read -r name branch sha remote url clone_url is_local; do
     [ -n "$name" ] || continue
     processed=$((processed + 1))
     dir="$target/$name"
+    if [ "$is_local" = "1" ]; then
+      echo "  ⚠ $name: local-only in the lock (no remote) — cannot be reproduced"
+      continue
+    fi
     if [ ! -d "$dir/.git" ]; then
+      # Clone from the URL the lock recorded, not an assumed org path: some
+      # repos here live only as a personal fork, or under another owner.
       echo "▶ cloning $name"
-      git clone --quiet "$ORG/$name" "$dir" || { echo "  ✗ clone failed"; continue; }
+      git clone --quiet "${clone_url:-$ORG/$name}" "$dir" || { echo "  ✗ clone failed ($clone_url)"; continue; }
     elif [ -n "$(git -C "$dir" status --porcelain)" ]; then
       echo "  ⚠ $name has uncommitted changes — leaving it alone"
       continue
@@ -1247,7 +1253,7 @@ env_adopt() {
     else
       echo "  ✗ $name: commit ${sha:0:8} not found on any remote (unpushed work?)"
     fi
-  done < <(node -e 'const fs=require("fs");const l=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));for(const [n,r] of Object.entries(l.repos||{}))console.log([n,r.branch,r.sha,r.remote,r.remoteUrl].join("\t"))' "$tmp")
+  done < <(node -e 'const fs=require("fs");const l=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));for(const [n,r] of Object.entries(l.repos||{}))console.log([n,r.branch,r.sha,r.remote,r.remoteUrl,r.cloneUrl||"",r.local?1:0].join("\t"))' "$tmp")
 
   [ "$processed" -gt 0 ] || { rm -f "$tmp"; die "$owner's lock lists no repos (is workspace.lock.json valid?)"; }
 
