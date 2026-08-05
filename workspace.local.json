@@ -27,8 +27,7 @@
   "playgrounds": {
     "tsc-playground": {
       "path": "/Users/drew/src/tsc-playground",
-      "effort": "parametric-enclosures",
-      "dev": false
+      "effort": "parametric-enclosures"
     }
   }
 }
