@@ -331,163 +331,32 @@ ln -sfn ~/src/tscircuit/skill .claude/skills/tscircuit
 
 `~/src/tsc-playground` is set up this way.
 
-## Coordinate frames, side names, and transforms
+## Coordinate frames and side names — where the rules live
 
 This workspace has spent more time on side-naming and transform defects than on
-any other class of bug. The rules below are the settled outcome. They apply in
-every repo, to code, prose, enum values and test names.
+any other class of bug, so the rules are written down. They are **domain law,
+not workspace mechanics**, and they live in the repos whose code they govern —
+an agent working in one of those repos must read that repo's `AGENTS.md` before
+touching geometry:
 
-### Canonical direction names
+| Repo | Owns |
+|---|---|
+| `circuit-json` | the direction vocabulary itself: the six canonical names, `InsertionDirection`, the `top`/`bottom` layer-vs-direction collision, the `lint:zod` snake_case gate. The authoritative reasoning is the docstring in `src/pcb/properties/insertion_direction.ts`. |
+| `core` | transforms: compose rather than hand-roll, derive from the component's matrix, a layer flip is a rotation (`flipY`) not an inversion, and how to test geometry. |
+| `create-fdm-enclosure` | `EnclosureFace`/`BoardWall` Cartesian face names, and the migration hazard — `top` was **+Z**, so it maps to `z_pos`, never `y_pos`. |
+| `3d-viewer`, `circuit-json-to-gltf` | the renderer frames (Circuit JSON is Z-up, the scene is Y-up), the duplicated per-format normalization, and the consolidation proposal in `rfc/rfcs/2026-07-22-coordinate-frame-consolidation.md`. |
 
-A direction name states **where something is**, not which way it travels, and it
-is always expressed in board/project space:
+Two things worth knowing before you open any of them:
 
-| Axis | Name | `insertion_direction` |
-| --- | --- | --- |
-| +X | `right` | `from_right` |
-| −X | `left` | `from_left` |
-| +Y | `top` | `from_top` |
-| −Y | `bottom` | `from_bottom` |
-| +Z | `above` | `from_above` |
-| −Z | `below` | `from_below` |
-
-Published in `circuit-json` as `InsertionDirection`. The Cartesian and
-deprecated spellings are still accepted **as input** and normalized through
-`insertionDirectionToCanonical`; emitted Circuit JSON always carries one of the
-six canonical names.
-
-**`front` and `back` are retired.** They meant opposite axes in different parts
-of the ecosystem — `3d-viewer`'s `Front` camera preset is −Y, while `core`,
-`checks` and `circuit-json-to-gltf` treated front as +Y — and that disagreement
-is the root of most defects in this area. Do not reintroduce them in new code,
-enum values, comments or docs. **Prefer naming the axis outright** ("the +X
-face") wherever a sentence can carry it; a named direction is a convenience, the
-axis is the truth.
-
-### The layer/direction collision — the one real gotcha
-
-`top` and `bottom` name **different axes** depending on what owns them:
-
-| Owner | `top` | `bottom` |
-| --- | --- | --- |
-| direction / `insertion_direction` | **+Y** | **−Y** |
-| **PCB layer** (`layer="top"`, `originalLayer`) | **+Z** | **−Z** |
-
-A PCB layer is a Z concept; a direction is a Y concept. They are unrelated
-quantities that happen to share two words. Whenever a symbol named `top` or
-`bottom` crosses a boundary, say in the docstring which of the two it is. Note
-also that a *component* carries `layer`, while a `<footprint>` carries
-`originalLayer`; the part is mirrored when the two differ. Enclosure faces avoid
-the ambiguity entirely by using Cartesian names — see below.
-
-### Enclosure faces are named Cartesian
-
-Because the collision above is worst for enclosure geometry — where a face can
-plausibly be ±Y *or* ±Z — enclosure and board faces skip named directions and
-use the axis outright. `EnclosureFace` (`create-fdm-enclosure`) and `BoardWall`
-(`core`) are both:
-
-```ts
-"x_pos" | "x_neg" | "y_pos" | "y_neg" | "z_pos" | "z_neg"
-```
-
-Spelled `_pos`/`_neg` rather than `+`/`-` to match the already-published
-`InsertionDirectionCartesian` (`from_x_pos`, `from_y_neg`, …) and because
-Circuit JSON enum values must be snake_case (`circuit-json/scripts/zod-lint.ts`),
-so one spelling works on both sides of that boundary with no translation layer.
-
-Since both types use the same names, converting a board wall to an enclosure
-face is an identity — assert that rather than mapping it.
-
-| `insertion_direction` | face |
-| --- | --- |
-| `from_right` | `x_pos` |
-| `from_left` | `x_neg` |
-| `from_top` | `y_pos` |
-| `from_bottom` | `y_neg` |
-| `from_above` | `z_pos` |
-| `from_below` | `z_neg` |
-
-**Migration hazard — `top` and `bottom` change meaning.** In the old
-`EnclosureFace` they were the **Z** faces (lid and floor), not the Y walls:
-
-| old name | axis | new name |
-| --- | --- | --- |
-| `right` | +X | `x_pos` |
-| `left` | −X | `x_neg` |
-| `front` | +Y | `y_pos` |
-| `back` | −Y | `y_neg` |
-| `top` | **+Z** | `z_pos` |
-| `bottom` | **−Z** | `z_neg` |
-
-So `top → z_pos`, **not** `y_pos`. A mechanical rename that reads `top` as +Y
-moves lid apertures onto a side wall, and the geometry still resolves, so
-nothing throws. Migrate by axis, never by word, and check `getFaceNormalAxis` /
-`getFaceNormalSign` agree afterwards. Watch `BoardWall` especially: `front` is
-−Y on core's `main` but +Y on `feat/parametric-enclosures`, so the correct
-target depends on which definition you are converting.
-
-### Transforms
-
-1. **Compose; never hand-roll a rotation matrix.** Use the repo's existing
-   matrix library (`transformation-matrix` in `core`) with `compose()` and
-   `applyToPoint()`. Hand-written `x*cos − y*sin` is exactly how the
-   `insertion_direction` flip bug survived: the direction math and the pad
-   geometry were two independent implementations of "the same" transform, and
-   they silently disagreed on bottom-layer parts.
-2. **Find the reference transform first.** Before writing a transform for some
-   object, find an object that already moves the same way and build from the
-   same expression. Anything that follows a component — pads, silkscreen, a
-   derived direction — must be derived from the component's matrix, so it cannot
-   drift when that matrix changes.
-3. **Cite what you copied.** Name the file, symbol and branch in a comment next
-   to the code, and quote the expression if it is short. A reader must be able
-   to check agreement without re-deriving the geometry.
-4. **Composition order is load-bearing.** `compose(a, b)` applies **b first**.
-   Reflections and rotations do not commute (`F·R(θ) = R(−θ)·F`), so a wrong
-   order is not a cosmetic difference — it silently inverts results at some
-   angles and not others.
-5. **A layer flip is a rotation, not an inversion.** `core` flips to the bottom
-   layer with `flipY()` (mirror *on* the y-axis, i.e. negate X), a 180° rotation
-   about Y: `(x, y, z) → (−x, y, −z)`. Exactly two components invert. Negating
-   all three would be an improper transform (determinant −1) and would turn the
-   part into its own mirror image.
-
-### Declare the frame at every boundary
-
-Any function or record that carries geometry states explicitly, in its
-docstring: **which frame** (footprint-local, board/circuit world, renderer/glTF
-scene), **what the axes mean**, **units** (mm throughout tscircuit),
-**handedness and which way is up**, and **whether the value is a point or a
-direction** — a point picks up translation, a direction must not.
-
-### Validate a convention before copying it
-
-Matching surrounding code is the default *only* once you have confirmed the
-surrounding code is intentional. Prevailing patterns here have repeatedly turned
-out to be bugs or compensations for bugs elsewhere. Before adopting one, find
-its origin commit, the test that pins it, or a measurement that confirms it —
-and prefer removing a compensation at its source over adding a matching one.
-
-**The 3D renderers are the highest-risk area** and the biggest cleanup
-opportunity: duplicated per-format normalization, hardcoded rotations, a late
-X-mirror in the glTF builder, and separate transform tables in `3d-viewer` and
-`circuit-json-to-gltf`. See `rfc/rfcs/2026-07-22-coordinate-frame-consolidation.md`.
-
-### Testing geometry
-
-- **Derive expectations from ground truth, not from the transform.** Assert
-  against where geometry actually lands (emitted pad coordinates), so the test
-  still fails if the transform and the geometry ever diverge again. A test that
-  restates the implementation only pins the implementation — including its bugs.
-- **Make probes discriminating.** A marker at `x = 0` cannot detect an X mirror,
-  and 90°/270° rotations cannot distinguish a wrong mirror axis (there, wrong
-  and right agree exactly). Use off-axis markers and cover 0°/180° *and*
-  90°/270°, on both layers.
-- **Never blind-rebaseline a snapshot.** Look at the image. A rebaseline here
-  once silently disabled the very regression guard its test comment described.
-  Caption snapshots (see `tests/fixtures/caption-png.ts`) so a wrong render
-  reads as wrong in a diff viewer rather than merely different.
+- **`front` and `back` are retired.** They meant opposite axes in different
+  packages — `3d-viewer`'s `Front` camera preset is −Y, while `core`, `checks`
+  and `circuit-json-to-gltf` treated front as +Y. Prefer naming the axis
+  outright ("the +X face") in any new code, in any repo.
+- **A change to this vocabulary spans repos.** The names are defined in
+  `circuit-json` and consumed by core, the renderers and the enclosure solver,
+  so a rename is a bottom-up chain (see the bundling gotcha above) and the docs
+  in each repo must move with it. When you change the rule, change it where it
+  lives — not here.
 
 ## Conventions agents must follow
 
