@@ -1,8 +1,8 @@
 {
   "$comment": "Snapshot of a build environment: every cloned repo's clone URL, branch and SHA plus the yalc links between them. Reproduce with `./tsc-dev env adopt <owner>`. Regenerate with `./tsc-dev freeze`.",
-  "generatedAt": "2026-08-05T18:25:07.742Z",
+  "generatedAt": "2026-08-05T18:33:21.668Z",
   "tool": {
-    "workspaceCommit": "deac50b2c5cbb5a5e1ec62daa7b720128246ced8",
+    "workspaceCommit": "cd946ed2d83c43cfc4a76d12446dd88d5ae84f16",
     "bun": "1.3.14",
     "node": "v26.0.0"
   },
@@ -388,8 +388,8 @@
       "dirty": false
     },
     "infer-cable-insertion-point": {
-      "branch": "fix/release-version-sync",
-      "sha": "4e55d0725153b04a83851d0f0a5b817e359b7c73",
+      "branch": "main",
+      "sha": "8e2e255cbd2129365f1442a3ee40b3cdab7926d3",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/infer-cable-insertion-point",
       "cloneUrl": "https://github.com/tscircuit/infer-cable-insertion-point",
