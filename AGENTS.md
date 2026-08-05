@@ -44,6 +44,8 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `rebuild <repo...>` | link local deps + build + push, **in order** (propagate a change up the chain) |
 | `doctor [target...]` | audit yalc links (unstamped versions, npm copies that overwrote a link, stale links) |
 | `prune-store [--keep N]` | delete old `-local.*` builds from the yalc store |
+| `pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
+| `pr-check <repo> <branch>` | run the PR gates CI runs, derived from that repo's workflows |
 | `dev [file]` | run the CLI dev server **from source** |
 | `unlink <consumer>` | `yalc remove --all` + `bun install` (restore npm versions) |
 | `status` | list cloned repos, package names, active yalc links |
@@ -98,9 +100,11 @@ bun run format         # biome format
 ### Repo-specific CI gates (check before opening a PR)
 
 The four commands above are the *common* subset. Several repos run additional
-gates in CI that will fail a PR even when tests and typecheck pass. **Before
-pushing, read that repo's `.github/workflows/*.yml` and run every script they
-invoke** — do not assume the generic set is sufficient.
+gates in CI that will fail a PR even when tests and typecheck pass.
+**`./tsc-dev pr-check <repo> <branch>` runs them for you**, derived from that
+repo's own `pull_request` workflows so the list cannot go stale. Run it (or read
+the repo's `.github/workflows/*.yml`) before pushing — do not assume the generic
+set is sufficient.
 
 | Repo | Gates beyond `bun test` / `bunx tsc --noEmit` |
 |---|---|
@@ -130,6 +134,27 @@ imply `lint:zod` passes.
   nothing to inspect. Not a problem.
 - `error: Script not found "build"` from `tsc-dev publish/rebuild` — that repo is
   source-only (no build step); nothing to build, safe to ignore.
+
+## Upstream fixes found while working on a feature
+
+When feature work turns up an isolated upstream bug, do **not** fix it in the
+feature checkout: the PR would inherit unrelated commits and a yalc-dirtied
+`package.json`, and testing it churns the build/link state of your feature
+environment. Give it its own worktree off upstream `main`:
+
+```bash
+./tsc-dev pr <repo> <branch> --pick <sha>       # a fix already committed on the feature branch
+./tsc-dev pr <repo> <branch> --take <path>      # a fix that only exists in the working tree
+./tsc-dev pr-check <repo> <branch>              # exactly the gates CI runs on a PR
+./tsc-dev pr-rm <repo> <branch> --delete-branch
+```
+
+The worktree has its own checkout, its own `node_modules`, and (by construction,
+since its `package.json` comes from upstream) no yalc links — `--take
+package.json` is refused for that reason. A worktree must never `yalc publish`
+into the shared `~/.yalc` store, which would replace the build your feature
+environment is running on; `./tsc-dev pr-link` uses a private store inside the
+worktree instead.
 
 ## Local build versions (never hand-edit `version`)
 

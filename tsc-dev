@@ -30,6 +30,22 @@
 #                                     paths; defaults to every linked repo + project yalc knows about.
 #   ./tsc-dev prune-store [--keep N]  Delete old `-local.*` builds from the yalc store (default keep 2
 #                                     newest per package). Released versions are never touched.
+#   ./tsc-dev pr <repo> <branch>      Create an ISOLATED worktree off upstream main for a small
+#                                     upstream fix, without disturbing your feature checkout: its own
+#                                     working tree, its own node_modules, and no yalc links (its
+#                                     package.json comes from upstream). Options:
+#                                       --base <ref>     base other than origin/main
+#                                       --pick <commit>  cherry-pick a commit out of your feature branch
+#                                       --take <path>    copy a path from your working tree as-is
+#                                       --no-install     skip `bun install`
+#   ./tsc-dev pr-check <repo> <br>    Run the gates CI runs on a PR for that repo, in the worktree.
+#                                     Derived from the repo's own pull_request workflows, so
+#                                     repo-specific gates (lint:zod, format:check, smoke-test:dist)
+#                                     can't drift out of a hand-maintained list.
+#   ./tsc-dev pr-link <repo> <br> <d> Link workspace repo <d> into the worktree via a PRIVATE yalc
+#                                     store, so it cannot disturb your feature environment's links.
+#   ./tsc-dev pr-list                 List PR worktrees and their commits ahead of upstream
+#   ./tsc-dev pr-rm <repo> <br>       Remove a PR worktree (add --delete-branch to drop the branch)
 #   ./tsc-dev rebuild <repo> [repo..] Link local deps + build + yalc push, for each repo IN ORDER.
 #                                     Use this to propagate a change up the bundling chain. Because
 #                                     core/props/circuit-json are INLINED into eval's webworker, which
@@ -567,6 +583,231 @@ cmd_status() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Isolated PR worktrees
+#
+# Feature work here routinely turns up a small, self-contained upstream bug that
+# deserves its own PR immediately. Fixing it in your feature checkout is bad on
+# both ends: the PR picks up unrelated feature commits and yalc-dirtied
+# package.json, and testing it churns the build/link state you had set up.
+#
+# `pr` gives that fix its own git worktree off upstream main, in .worktrees/,
+# which is isolated in the three ways that matter here:
+#   1. separate checkout — your feature branch, and its dirty tree, are untouched;
+#   2. separate node_modules — `bun install` in the worktree, no shared state;
+#   3. no yalc links — package.json comes from upstream main, so it carries none
+#      by construction. (A worktree must NOT `yalc publish` to the shared store,
+#      which is global and would overwrite what your feature env is using. Use
+#      `pr-link`, which keeps a private store inside the worktree.)
+# ---------------------------------------------------------------------------
+WT_ROOT="$ROOT/.worktrees"
+
+wt_dir() { echo "$WT_ROOT/$1/$2"; }
+
+# The upstream default branch (main here, master in a few older repos).
+origin_head() {
+  local repo="$1" ref
+  ref="$(git -C "$ROOT/$repo" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [ -n "$ref" ]; then echo "origin/${ref##*/}"; return 0; fi
+  if git -C "$ROOT/$repo" show-ref --verify --quiet refs/remotes/origin/main; then
+    echo "origin/main"
+  else
+    echo "origin/master"
+  fi
+}
+
+# The commands CI actually runs on a pull request, read from the repo's own
+# workflows rather than from a table someone has to maintain — the gate set
+# varies per repo (circuit-json's `lint:zod`, core's `smoke-test:dist`,
+# dependency-check, ...) and a hand-copied list is exactly what goes stale.
+# Only pull_request-triggered workflows count, which drops release, bot and
+# codegen jobs; the filter then removes installs, mutating (--write) steps, and
+# anything parameterised by a workflow expression.
+ci_gates() {
+  local dir="$1" f
+  {
+    for f in "$dir"/.github/workflows/*.yml "$dir"/.github/workflows/*.yaml; do
+      [ -f "$f" ] || continue
+      grep -q 'pull_request' "$f" || continue
+      sed -nE 's/^[[:space:]]*(-[[:space:]]*)?run:[[:space:]]*//p' "$f"
+      # Several workflow files have no trailing newline; without this the last
+      # command of one file fuses onto the first command of the next.
+      printf '\n'
+    done
+    # `bun test` is frequently invoked from a multi-line, matrix-sharded step
+    # (core shards 10 ways through .github/test-plans/), which no line-level
+    # parse can reconstruct — and the right local equivalent is just the whole
+    # suite. Appended last because it is also the slowest gate.
+    if [ -n "$(find "$dir" -name '*.test.*' -not -path '*/node_modules/*' -print -quit 2>/dev/null)" ]; then
+      echo "bun test"
+    fi
+  } \
+    | sed 's/[[:space:]]*$//' \
+    | grep -vE '^\|$|^$' \
+    | grep -vE '\$\{\{|--write|^bun (install|i|add|update)|^npm (install|ci|publish)|^npx? .*publish|pver|bunaider|generate-test-plan|^echo|^exit|^git ' \
+    | awk '!seen[$0]++'   # dedup, but keep workflow order: build must precede smoke-test:dist
+}
+
+cmd_pr() {
+  local repo="" branch="" base="" no_install=0
+  local picks=() takes=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --base) base="${2:?--base needs a ref}"; shift 2 ;;
+      --pick) picks+=("${2:?--pick needs a commit}"); shift 2 ;;
+      --take) takes+=("${2:?--take needs a path}"); shift 2 ;;
+      --no-install) no_install=1; shift ;;
+      -*) die "unknown flag '$1'" ;;
+      *) if [ -z "$repo" ]; then repo="$1"; elif [ -z "$branch" ]; then branch="$1"; else die "unexpected argument '$1'"; fi; shift ;;
+    esac
+  done
+  [ -n "$repo" ] && [ -n "$branch" ] \
+    || die "usage: pr <repo> <branch> [--base <ref>] [--pick <commit>]... [--take <path>]... [--no-install]"
+  have "$repo" || die "repo '$repo' is not cloned"
+  local src="$ROOT/$repo" dir; dir="$(wt_dir "$repo" "$branch")"
+  [ -e "$dir" ] && die "worktree already exists: $dir  (remove: ./tsc-dev pr-rm $repo $branch)"
+
+  echo "▶ fetch origin ($repo)"
+  git -C "$src" fetch origin --quiet || die "fetch failed"
+  [ -n "$base" ] || base="$(origin_head "$repo")"
+  git -C "$src" rev-parse --verify --quiet "$base" >/dev/null || die "no such base ref: $base"
+
+  mkdir -p "$(dirname "$dir")"
+  if git -C "$src" show-ref --verify --quiet "refs/heads/$branch"; then
+    echo "▶ worktree $repo:$branch (existing branch) -> ${dir/#$HOME/~}"
+    git -C "$src" worktree add --quiet "$dir" "$branch"
+  else
+    echo "▶ worktree $repo:$branch off $base ($(git -C "$src" rev-parse --short "$base")) -> ${dir/#$HOME/~}"
+    git -C "$src" worktree add --quiet -b "$branch" "$dir" "$base"
+  fi
+
+  local p failed_pick=0
+  if [ ${#picks[@]} -gt 0 ]; then
+    for p in "${picks[@]}"; do
+      if git -C "$dir" cherry-pick "$p" >/dev/null 2>&1; then
+        echo "  ↳ cherry-picked $(git -C "$src" rev-parse --short "$p")  $(git -C "$src" log -1 --format=%s "$p")"
+      else
+        git -C "$dir" cherry-pick --abort 2>/dev/null || true
+        echo "  ✗ cherry-pick $p conflicts with $base — the fix depends on feature work."
+        echo "      Either land the prerequisite first, or re-apply by hand: --take <path>"
+        failed_pick=1
+      fi
+    done
+  fi
+
+  if [ ${#takes[@]} -gt 0 ]; then
+    for p in "${takes[@]}"; do
+      # package.json in a feature checkout is yalc-dirtied (file:.yalc/ deps);
+      # copying it would put local links in the PR.
+      case "$(basename "$p")" in
+        package.json) echo "  ⚠ refusing --take package.json (it carries yalc file:.yalc/ links) — edit it in the worktree instead"; continue ;;
+      esac
+      [ -e "$src/$p" ] || { echo "  ⚠ no such path in $repo: $p"; continue; }
+      mkdir -p "$dir/$(dirname "$p")"
+      cp -R "$src/$p" "$dir/$p"
+      echo "  ↳ took $p from your working tree (uncommitted)"
+    done
+  fi
+
+  if [ "$no_install" = 0 ]; then
+    echo "▶ bun install (worktree-local node_modules)"
+    (cd "$dir" && bun install)
+  fi
+  if grep -q '"file:\.yalc/' "$dir/package.json" 2>/dev/null; then
+    echo "  ⚠ this worktree's package.json contains yalc links — remove them before pushing"
+  fi
+
+  echo "✓ isolated worktree ready: $dir"
+  echo "    cd $dir"
+  echo "    ./tsc-dev pr-check $repo $branch      # run exactly the gates CI runs on a PR"
+  echo "    git -C $dir push -u fork $branch && gh pr create -R tscircuit/$repo"
+  [ "$failed_pick" = 1 ] && return 1
+  return 0
+}
+
+# Run the repo's own PR gates inside the worktree. Cheaper than pushing and
+# waiting for CI, and it catches the repo-specific gates (lint:zod,
+# format:check, smoke-test:dist) that the generic test+typecheck pair misses.
+cmd_pr_check() {
+  local repo="${1:?usage: pr-check <repo> <branch>}" branch="${2:?usage: pr-check <repo> <branch>}"
+  have "$repo" || die "repo '$repo' is not cloned"
+  local dir; dir="$(wt_dir "$repo" "$branch")"
+  [ -d "$dir" ] || die "no worktree at $dir  (create it: ./tsc-dev pr $repo $branch)"
+  [ -d "$dir/node_modules" ] || { echo "▶ bun install"; (cd "$dir" && bun install); }
+  local gates=() g
+  while IFS= read -r g; do [ -n "$g" ] && gates+=("$g"); done < <(ci_gates "$dir")
+  [ ${#gates[@]} -gt 0 ] || { echo "⚠ no pull_request-gated commands found in $repo/.github/workflows"; return 0; }
+  echo "▶ ${#gates[@]} gate(s) from $repo/.github/workflows (pull_request-triggered)"
+  local failed=() ok=0
+  for g in "${gates[@]}"; do
+    echo "=== $g"
+    if (cd "$dir" && eval "$g"); then ok=$((ok + 1)); else failed+=("$g"); fi
+  done
+  echo "————————————————————————————————————————"
+  if [ ${#failed[@]} -eq 0 ]; then
+    echo "✓ $ok/${#gates[@]} gates passed in $repo:$branch"
+  else
+    echo "✗ $ok/${#gates[@]} gates passed; failed:"
+    for g in "${failed[@]}"; do echo "    - $g"; done
+    return 1
+  fi
+}
+
+# Link one workspace package into a PR worktree through a PRIVATE yalc store.
+# The shared store (~/.yalc) is global: publishing into it from a worktree would
+# silently replace the build your feature environment is running on. --store-folder
+# keeps the whole exchange inside the worktree.
+cmd_pr_link() {
+  local repo="${1:?usage: pr-link <repo> <branch> <dep-repo>}"
+  local branch="${2:?usage: pr-link <repo> <branch> <dep-repo>}"
+  local dep="${3:?usage: pr-link <repo> <branch> <dep-repo>}"
+  have "$repo" || die "repo '$repo' is not cloned"
+  have "$dep" || die "dep repo '$dep' is not cloned"
+  local dir; dir="$(wt_dir "$repo" "$branch")"
+  [ -d "$dir" ] || die "no worktree at $dir  (create it: ./tsc-dev pr $repo $branch)"
+  local store="$dir/.yalc-store" name; name="$(pkgname "$dep")"
+  has_build "$dep" && { echo "▶ build ($dep)"; (cd "$ROOT/$dep" && bun run build); }
+  echo "▶ publish $name to the worktree's private store"
+  with_dev_version "$dep" env -C "$ROOT/$dep" yalc publish --store-folder "$store"
+  echo "▶ yalc add $name (in the worktree)"
+  (cd "$dir" && yalc add "$name" --store-folder "$store")
+  echo "⚠ remove this link before pushing:  (cd $dir && yalc remove --all && bun install)"
+}
+
+cmd_pr_list() {
+  [ -d "$WT_ROOT" ] || { echo "no PR worktrees"; return 0; }
+  local d repo w branch base
+  for d in "$WT_ROOT"/*/; do
+    [ -d "$d" ] || continue
+    repo="$(basename "$d")"
+    base="$(origin_head "$repo" 2>/dev/null || echo '')"
+    while IFS= read -r w; do
+      [ -n "$w" ] || continue
+      branch="$(git -C "$w" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+      printf '• %-24s %-34s %s\n' "$repo" "$branch" "${w/#$HOME/~}"
+      [ -n "$base" ] && git -C "$w" log --oneline "$base..HEAD" 2>/dev/null | sed 's/^/      /'
+    done < <(find "$d" -maxdepth 3 -name .git -exec dirname {} \; 2>/dev/null | sort)
+  done
+}
+
+cmd_pr_rm() {
+  local repo="${1:?usage: pr-rm <repo> <branch> [--delete-branch]}"
+  local branch="${2:?usage: pr-rm <repo> <branch> [--delete-branch]}"
+  have "$repo" || die "repo '$repo' is not cloned"
+  local dir; dir="$(wt_dir "$repo" "$branch")"
+  [ -d "$dir" ] || die "no worktree at $dir"
+  echo "▶ removing worktree $repo:$branch"
+  git -C "$ROOT/$repo" worktree remove --force "$dir"
+  rmdir "$(dirname "$dir")" 2>/dev/null || true
+  rmdir "$WT_ROOT/$repo" 2>/dev/null || true
+  rmdir "$WT_ROOT" 2>/dev/null || true
+  if [ "${3:-}" = "--delete-branch" ]; then
+    git -C "$ROOT/$repo" branch -D "$branch" && echo "  ↳ deleted branch $branch"
+  else
+    echo "  ℹ branch $branch kept (delete with: git -C $ROOT/$repo branch -D $branch)"
+  fi
+}
+
 # The forks that carry the parametric-enclosure work, in release order (see
 # `create-fdm-enclosure/README.md`). Downstream rebuild-only repos (eval,
 # runframe, cli) and unrelated forks (circuit-json-util, exec) are deliberately
@@ -757,6 +998,11 @@ main() {
     unlink)  cmd_unlink "$@" ;;
     doctor)  cmd_doctor "$@" ;;
     prune-store) cmd_prune_store "$@" ;;
+    pr)       cmd_pr "$@" ;;
+    pr-check) cmd_pr_check "$@" ;;
+    pr-link)  cmd_pr_link "$@" ;;
+    pr-list)  cmd_pr_list "$@" ;;
+    pr-rm)    cmd_pr_rm "$@" ;;
     rebuild) cmd_rebuild "$@" ;;
     dev)     cmd_dev "$@" ;;
     pkgname) pkgname "${1:?usage: pkgname <repo>}" ;;

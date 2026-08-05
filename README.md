@@ -36,6 +36,10 @@ commands. Common ones:
 | `./tsc-dev unlink <consumer>` | `yalc remove --all` + `bun install` (restore npm versions) |
 | `./tsc-dev doctor [target...]` | audit yalc links: unstamped versions, npm copies that overwrote a link, stale links |
 | `./tsc-dev prune-store [--keep N]` | delete old `-local.*` builds from the yalc store (released versions untouched) |
+| `./tsc-dev pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
+| `./tsc-dev pr-check <repo> <branch>` | run the gates CI runs on a PR, derived from that repo's workflows |
+| `./tsc-dev pr-link <repo> <br> <dep>` | link a workspace package into a PR worktree via a private yalc store |
+| `./tsc-dev pr-list` / `pr-rm` | list / remove PR worktrees |
 | `./tsc-dev rebuild <repo...>` | link local deps + build + `yalc push` for each repo **in order** (propagate a change up the chain) |
 | `./tsc-dev dev [path] [--local]` | run the CLI dev server **from source** on a circuit project; `--local` serves your locally-built runframe |
 | `./tsc-dev status` | list cloned repos, package names, and active links |
@@ -235,6 +239,59 @@ Always remove yalc links so package.json points back at npm versions:
 ./tsc-dev unlink core    # yalc remove --all && bun install
 ./tsc-dev unlink eval    # ...repeat for every repo you linked into
 ```
+
+## Upstream fixes while mid-feature
+
+Large feature work keeps turning up small, self-contained upstream bugs that
+should be PR'd immediately. Fixing them in your feature checkout is wrong on
+both ends: the PR inherits unrelated feature commits and a yalc-dirtied
+`package.json`, and testing it churns the build/link state you had set up.
+
+`./tsc-dev pr` gives the fix its own git worktree off upstream `main`:
+
+```bash
+# a fix you have already committed on your feature branch:
+./tsc-dev pr circuit-json fix/enum-snake-case --pick a1b2c3d
+
+# a fix that only exists in your working tree:
+./tsc-dev pr core fix/pad-transform --take lib/components/Pad.ts
+
+./tsc-dev pr-check core fix/pad-transform      # exactly what CI runs on a PR
+cd .worktrees/core/fix/pad-transform
+git push -u fork fix/pad-transform && gh pr create -R tscircuit/core
+./tsc-dev pr-rm core fix/pad-transform --delete-branch
+```
+
+Isolation is real in the three ways that matter:
+
+1. **Separate checkout** — your feature branch and its dirty tree are untouched;
+   `git worktree` shares the object store, so this costs no extra clone.
+2. **Separate `node_modules`** — `bun install` runs inside the worktree.
+3. **No yalc links** — the worktree's `package.json` comes from upstream `main`,
+   so it carries none by construction. `--take package.json` is *refused* for
+   exactly this reason. If the fix genuinely needs a local dependency, use
+   `pr-link`, which publishes through a private store inside the worktree
+   (`yalc --store-folder`) rather than the global `~/.yalc` your feature
+   environment is running on.
+
+### `pr-check` derives the gates, it doesn't hardcode them
+
+Gates are read from the repo's own `pull_request`-triggered workflows, so the
+repo-specific ones can't drift out of a hand-maintained table:
+
+```
+core          bunx tsc --noEmit · bunx @tscircuit/dependency-check · biome format .
+              bun run build · bun run smoke-test:dist · bun test
+circuit-json  bun test · bunx tsc --noEmit · bun run check-snake-case · bun run lint:zod
+props         bun test · biome format . · bun run format:check · bunx tsc --noEmit
+```
+
+Order is workflow order, not alphabetical, so `build` precedes `smoke-test:dist`.
+Release, bot and codegen jobs are excluded (they aren't PR gates), as are
+mutating steps (`--write`) and CI-sharding helpers. `bun test` is appended when
+the repo has test files, because several repos invoke it from a matrix-sharded
+multi-line step that no line-level parse can reconstruct — and the correct local
+equivalent is simply the whole suite.
 
 ## Local build versions
 
