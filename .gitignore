@@ -1,0 +1,23 @@
+# Allowlist, not a denylist: everything in this directory is ignored unless it
+# is explicitly re-included below.
+#
+# The cloned tscircuit repos live here as siblings, and each is an INDEPENDENT
+# git checkout. They must never be tracked by this repo: `git add core/` on a
+# nested checkout does not fail, it silently records a gitlink (mode 160000) —
+# an accidental submodule pinning someone's local SHA. An allowlist makes that
+# structurally impossible, and it also keeps personal scratch (session notes,
+# .bak dirs, exported images, snapshots) out by default.
+#
+# To share a new workspace file, add an explicit `!` line for it.
+/*
+
+!/.gitignore
+!/README.md
+!/AGENTS.md
+!/MAP.md
+!/tsc-dev
+!/bin/
+
+# Machine-local state, regenerable — never shared:
+#   .tscircuit-repos.txt  cache of org repo names (refresh with gh, see AGENTS.md)
+#   .worktrees/           isolated PR worktrees created by `./tsc-dev pr`

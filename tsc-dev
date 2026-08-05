@@ -1,0 +1,769 @@
+#!/usr/bin/env bash
+#
+# tsc-dev — a tiny workspace manager for multi-repo tscircuit development.
+#
+# tscircuit is NOT a monorepo: each package lives in its own GitHub repo under
+# https://github.com/tscircuit and is published to npm independently. Cross-repo
+# development is done with `yalc` (a local package registry). This script just
+# automates the clone + build + yalc-link dance described in the handbook:
+#   https://github.com/tscircuit/handbook/blob/main/guides/using-yalc.md
+#
+# All repos are cloned as flat siblings inside this directory (the workspace
+# root), e.g. ~/src/tscircuit/core, ~/src/tscircuit/props, ...
+#
+# Usage:
+#   ./tsc-dev clone [repo ...]        Clone repos from the tscircuit org (default set if none given)
+#   ./tsc-dev clone-deps <repo> [-r]  Clone the tscircuit-org repos <repo> depends on (its dependency
+#                                     closure). Add -r/--recursive to follow deps-of-deps. Great for
+#                                     exploring "everything core actually uses".
+#   ./tsc-dev clone-group <group>     Bulk-clone a curated category (run with no group to list them)
+#   ./tsc-dev search <pattern> [..]   ripgrep across every cloned repo (passes extra args to rg)
+#   ./tsc-dev install [repo ...]      `bun install` in the given repos (default: all cloned)
+#   ./tsc-dev publish <repo>          Build <repo> (if it has a build script) and `yalc publish`
+#   ./tsc-dev watch <repo>            Same as publish, but keeps republishing on change (yalc --watch)
+#   ./tsc-dev link <consumer> <dep>   In <consumer>, `yalc add` the package provided by <dep> repo
+#   ./tsc-dev push <repo>             Rebuild <repo> and `yalc push` to every consumer using it
+#   ./tsc-dev unlink <consumer>       Remove all yalc links from <consumer> and restore npm versions
+#   ./tsc-dev doctor [target...]      Audit yalc links in repos/projects: detect a local build that
+#                                     claims a releasable version, an npm copy that has overwritten a
+#                                     link, and stale (unpushed) links. Targets are repo names or
+#                                     paths; defaults to every linked repo + project yalc knows about.
+#   ./tsc-dev prune-store [--keep N]  Delete old `-local.*` builds from the yalc store (default keep 2
+#                                     newest per package). Released versions are never touched.
+#   ./tsc-dev rebuild <repo> [repo..] Link local deps + build + yalc push, for each repo IN ORDER.
+#                                     Use this to propagate a change up the bundling chain. Because
+#                                     core/props/circuit-json are INLINED into eval's webworker, which
+#                                     is INLINED into runframe's standalone bundle, you must rebuild
+#                                     bottom-up. Canonical full chain for a core change:
+#                                         ./tsc-dev rebuild core eval runframe cli
+#   ./tsc-dev dev [file] [--local]   Run the CLI dev server FROM SOURCE on a circuit project.
+#                                     Pass a project dir or file (e.g. ../tscircuit-local). With
+#                                     --local it serves YOUR locally-built runframe standalone
+#                                     (reflecting local core/eval/runframe changes); without it,
+#                                     the cli's installed (published) packages are used.
+#   ./tsc-dev pkgname <repo>          Print the npm package name a repo publishes
+#   ./tsc-dev status                  List cloned repos, their package names, and active yalc links
+#   ./tsc-dev sync-forks [repo...]    Update each fork to head of upstream main with your patches on
+#                                     top: rebase the repo's patch branch in an isolated worktree,
+#                                     force-with-lease push to `fork`, and `gh repo sync` the fork's
+#                                     main. Defaults to the parametric-enclosure repos from
+#                                     create-fdm-enclosure/README.md: circuit-json props
+#                                     create-fdm-enclosure circuit-json-to-gltf
+#                                     infer-cable-insertion-point 3d-viewer core rfc. Each uses
+#                                     `feat/parametric-enclosures` except infer-cable-insertion-point
+#                                     (`fix/explicit-insertion-direction`); set SYNC_FORK_BRANCH to
+#                                     force one branch for every repo. Needs `gh`.
+#
+# LOCAL VERSIONS: publish/push/watch/rebuild stamp package.json with a throwaway
+# prerelease version — `0.0.4` is published to the yalc store as
+# `0.0.4-local.20260805T094955` — then restore package.json, so the working tree
+# stays clean. This exists because versions are assigned by CI (`pver release` in
+# bun-pver-release.yml bumps package.json, publishes to npm, and commits `vX.Y.Z`
+# back to main), which means a fresh checkout's version is *exactly* the released
+# artifact's version. Building locally from it produces a different package that
+# claims the same version — and since both the yalc store (~/.yalc/packages/<pkg>/
+# <version>) and bun's cache are keyed by version, the two silently substitute for
+# one another. A `-local.` prerelease sorts below every release, so it can never
+# collide with, or satisfy a range for, anything npm will ever mint.
+# Set TSC_DEV_NO_STAMP=1 to publish the literal package.json version instead.
+#
+# Examples:
+#   # Just hack on core (no yalc needed — core tests are self-contained):
+#   ./tsc-dev clone core && ./tsc-dev install core
+#   cd core && bun test
+#
+#   # Edit `props` and test the change inside `core`:
+#   ./tsc-dev clone core props
+#   ./tsc-dev install core props
+#   ./tsc-dev publish props          # build props + publish to local yalc store
+#   ./tsc-dev link core props        # core now uses your local props
+#   cd core && bun test
+#   # after editing props again:
+#   ../tsc-dev push props            # rebuild + push to core automatically
+#
+set -euo pipefail
+
+ORG="https://github.com/tscircuit"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_CACHE="$ROOT/.tscircuit-repos.txt"  # active org repo names, one per line
+
+# Curated categories for `clone-group`. Pick the area you want to explore.
+group_repos() {
+  case "$1" in
+    runtime)   echo "core eval runframe cli tscircuit props circuit-json" ;;
+    viewers)   echo "pcb-viewer schematic-viewer 3d-viewer assembly-viewer runframe circuit-to-svg circuit-to-canvas" ;;
+    exporters) echo "circuit-json-to-gerber circuit-json-to-kicad circuit-json-to-step circuit-json-to-spice circuit-json-to-gltf circuit-json-to-bom-csv circuit-json-to-pnp-csv" ;;
+    autorouting) echo "tscircuit-autorouter capacity-autorouter infgrid-ijump-astar bus-router high-density-a01 schematic-trace-solver freerouting-cli dsn-converter" ;;
+    solvers)   echo "matchpack calculate-packing copper-pour-solver breakout-point-solver schematic-match-adapt solver-utils miniflex minicssgrid bpc-graph" ;;
+    formats)   echo "circuit-json props footprinter schematic-symbols kicadts dsnts gerberts stepts circuit-json-util" ;;
+    importers) echo "easyeda-converter kicad-to-circuit-json kicad-converter svg-to-tscircuit circuit-json-to-tscircuit" ;;
+    *) return 1 ;;
+  esac
+}
+
+# A convenient default set for clone. Add more as you need them — any repo name
+# under github.com/tscircuit works with `clone`. These are the repos that make up
+# the runtime rendering chain (core -> eval -> runframe -> cli) plus common leaves.
+DEFAULT_REPOS=(core eval runframe cli tscircuit props circuit-json footprinter)
+
+# Find the cloned repo dir that publishes a given npm package name (empty if none).
+repo_for_pkg() {
+  local want="$1" d r n
+  for d in "$ROOT"/*/; do
+    [ -d "$d/.git" ] || continue
+    r="$(basename "$d")"
+    n="$(node -p "require('$d/package.json').name" 2>/dev/null)" || continue
+    if [ "$n" = "$want" ]; then echo "$r"; return 0; fi
+  done
+  return 0
+}
+
+# Print the dependency package names (deps + devDeps + peerDeps) of a repo.
+dep_names() {
+  node -e "let p=require('$ROOT/$1/package.json');console.log(Object.keys({...p.dependencies,...p.devDependencies,...p.peerDependencies}).join('\n'))" 2>/dev/null
+}
+
+die() { echo "error: $*" >&2; exit 1; }
+have() { [ -d "$ROOT/$1/.git" ]; }
+
+# Read the npm package name a cloned repo publishes (handles scoped + unscoped).
+pkgname() {
+  local repo="$1"
+  have "$repo" || die "repo '$repo' is not cloned (try: ./tsc-dev clone $repo)"
+  node -p "require('$ROOT/$repo/package.json').name" 2>/dev/null \
+    || die "could not read package name for '$repo'"
+}
+
+# Does the repo define a build script in package.json?
+has_build() {
+  node -e "process.exit(require('$ROOT/$1/package.json').scripts?.build?0:1)" 2>/dev/null
+}
+
+# Read a top-level field from a package.json (empty if the file/field is absent).
+pj_field() {
+  [ -f "$1" ] || return 0
+  node -e 'const fs=require("fs");try{const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(String(p[process.argv[2]]??""))}catch(e){}' "$1" "$2"
+}
+
+# ---------------------------------------------------------------------------
+# Local version stamping
+#
+# Versions in this ecosystem are minted by CI, not by hand: bun-pver-release.yml
+# runs `pver release` on every push to main, which bumps package.json, publishes
+# to npm, and commits the bump back as `vX.Y.Z` (e.g. create-fdm-enclosure
+# ad0d5be, author `GitHub Actions <actions@github.com>`). A fresh checkout's
+# version therefore names the *published artifact*, so a local build from that
+# checkout is a different package wearing the same version string. That is not
+# merely confusing: the yalc store is keyed by version
+# (~/.yalc/packages/<pkg>/<version>) and so is bun's cache, so the local and
+# published builds occupy the same slot and substitute for each other silently.
+#
+# Fix: publish under a throwaway prerelease, `0.0.4` -> `0.0.4-local.<stamp>`.
+# A prerelease sorts *below* its release (`0.0.4-local.1` < `0.0.4`) and
+# satisfies no ordinary range, so it can never be confused with, or accepted in
+# place of, anything npm will ever mint. package.json is restored from a byte
+# copy afterwards, so the working tree never carries a fake version into a diff
+# (the same hazard class as a leftover yalc link).
+#
+# Consequence to expect: `bun install` prints `warn: incorrect peer dependency`
+# for stamped packages, because a prerelease does not satisfy a caret range.
+# That warning is already routine in this workspace and is advisory only.
+# ---------------------------------------------------------------------------
+STAMP_PJ=""; STAMP_BAK=""
+
+stamp_restore() {
+  [ -n "$STAMP_BAK" ] || return 0
+  [ -f "$STAMP_BAK" ] && cp "$STAMP_BAK" "$STAMP_PJ"
+  rm -f "$STAMP_BAK"
+  STAMP_PJ=""; STAMP_BAK=""
+}
+
+# with_dev_version <repo> <cmd> [args...] — run <cmd> with <repo>/package.json
+# temporarily bearing a `-local.<stamp>` version. Restored via trap on Ctrl-C
+# too, so an interrupted `watch` cannot leave a fake version behind.
+with_dev_version() {
+  local repo="$1"; shift
+  local pj="$ROOT/$repo/package.json" real base stamped rc=0
+  real="$(pj_field "$pj" version)"
+  if [ "${TSC_DEV_NO_STAMP:-0}" = 1 ] || [ -z "$real" ]; then "$@"; return; fi
+  base="${real%%-local.*}"   # also re-stamps cleanly if a previous run crashed
+  stamped="$base-local.$(date +%Y%m%dT%H%M%S)"
+  STAMP_PJ="$pj"; STAMP_BAK="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-pj.XXXXXX")"
+  cp "$pj" "$STAMP_BAK"
+  trap 'stamp_restore' EXIT INT TERM
+  # Patch the version in place rather than re-serialising, so the published
+  # package.json is byte-identical to the repo's apart from that one string.
+  node -e 'const fs=require("fs");const f=process.argv[1];const s=fs.readFileSync(f,"utf8");fs.writeFileSync(f,s.replace(/("version"\s*:\s*")[^"]*"/,`$1${process.argv[2]}"`))' "$pj" "$stamped"
+  echo "  ⊙ local version $stamped  (package.json restored to $base afterwards)"
+  "$@" || rc=$?
+  stamp_restore
+  trap - EXIT INT TERM
+  return $rc
+}
+
+# Package names a consumer currently has linked, from its yalc.lock.
+yalc_lock_pkgs() {
+  node -e 'const fs=require("fs");try{const l=JSON.parse(fs.readFileSync(process.argv[1]+"/yalc.lock","utf8"));process.stdout.write(Object.keys(l.packages||{}).join("\n"))}catch(e){}' "$1"
+}
+
+# Every directory yalc has ever installed a package into (the store's own view).
+yalc_installations() {
+  node -e 'const fs=require("fs"),os=require("os");try{const i=JSON.parse(fs.readFileSync(os.homedir()+"/.yalc/installations.json","utf8"));process.stdout.write([...new Set(Object.values(i).flat())].sort().join("\n"))}catch(e){}'
+}
+
+cmd_clone() {
+  local repos=("$@"); [ ${#repos[@]} -eq 0 ] && repos=("${DEFAULT_REPOS[@]}")
+  for r in "${repos[@]}"; do
+    if have "$r"; then echo "✓ $r already cloned"; continue; fi
+    echo "▶ cloning $r"
+    git clone "$ORG/$r" "$ROOT/$r"
+  done
+}
+
+# Is a name an active repo in the tscircuit org? (uses the cached list)
+is_org_repo() {
+  [ -f "$REPO_CACHE" ] || gh repo list tscircuit --no-archived --limit 1000 --source --json name --jq '.[].name' 2>/dev/null | sort > "$REPO_CACHE"
+  grep -qxF "$1" "$REPO_CACHE"
+}
+
+cmd_clone_group() {
+  local g="${1:-}"
+  if [ -z "$g" ]; then
+    echo "available groups: runtime viewers exporters autorouting solvers formats importers"
+    echo "usage: ./tsc-dev clone-group <group>"; return 0
+  fi
+  local repos; repos="$(group_repos "$g")" || die "unknown group '$g' (run ./tsc-dev clone-group)"
+  cmd_clone $repos
+}
+
+cmd_clone_deps() {
+  local recursive=0 start=""
+  for a in "$@"; do
+    case "$a" in -r|--recursive) recursive=1 ;; *) start="$a" ;; esac
+  done
+  [ -n "$start" ] || die "usage: clone-deps <repo> [-r|--recursive]"
+  have "$start" || die "repo '$start' is not cloned (clone it first)"
+  local queue=("$start") seen=" " repo dep cand
+  while [ ${#queue[@]} -gt 0 ]; do
+    repo="${queue[0]}"; queue=("${queue[@]:1}")
+    case "$seen" in *" $repo "*) continue ;; esac
+    seen="$seen$repo "
+    have "$repo" || { echo "▶ cloning $repo"; git clone -q "$ORG/$repo" "$ROOT/$repo"; }
+    # derive candidate org repo names from this repo's dependencies
+    while IFS= read -r dep; do
+      [ -n "$dep" ] || continue
+      cand="${dep#@tscircuit/}"        # strip scope; unscoped names pass through
+      case "$cand" in @*/*) continue ;; esac   # skip other scopes (@types/... etc.)
+      is_org_repo "$cand" || continue
+      # For unscoped deps, confirm the org repo actually publishes THIS package
+      # (guards against name collisions like the npm `react` vs tscircuit/react).
+      if [ "$dep" = "$cand" ] && ! have "$cand"; then
+        local published
+        published="$(curl -sL "https://raw.githubusercontent.com/tscircuit/$cand/HEAD/package.json" 2>/dev/null | node -p "try{JSON.parse(require('fs').readFileSync(0)).name}catch(e){''}" 2>/dev/null)"
+        [ "$published" = "$dep" ] || { echo "  ⚠ skip $dep (org/$cand publishes '$published')"; continue; }
+      fi
+      if ! have "$cand"; then
+        echo "  ↳ dep $dep -> cloning $cand"; git clone -q "$ORG/$cand" "$ROOT/$cand"
+      fi
+      [ "$recursive" = 1 ] && queue+=("$cand")
+    done < <(dep_names "$repo")
+  done
+  echo "✓ dependency closure of '$start' cloned (recursive=$recursive)"
+}
+
+cmd_search() {
+  [ $# -ge 1 ] || die "usage: search <pattern> [extra rg args]"
+  local dirs=()
+  for d in "$ROOT"/*/; do [ -d "$d/.git" ] && dirs+=("$d"); done
+  [ ${#dirs[@]} -gt 0 ] || die "no repos cloned yet"
+  # search source only; skip build output and deps
+  rg --line-number --glob '!**/{node_modules,dist,.git,cosmos-export,benchmarking-dist}/**' "$@" "${dirs[@]}"
+}
+
+cmd_install() {
+  local repos=("$@")
+  if [ ${#repos[@]} -eq 0 ]; then
+    repos=(); for d in "$ROOT"/*/; do [ -d "$d/.git" ] && repos+=("$(basename "$d")"); done
+  fi
+  for r in "${repos[@]}"; do
+    echo "▶ bun install ($r)"; (cd "$ROOT/$r" && bun install)
+  done
+}
+
+do_build_publish() {
+  local repo="$1"
+  if has_build "$repo"; then
+    echo "▶ build ($repo)"; (cd "$ROOT/$repo" && bun run build)
+  else
+    echo "ℹ $repo has no build script (source-only package) — publishing as-is"
+  fi
+  echo "▶ yalc publish ($repo -> $(pkgname "$repo"))"
+  (cd "$ROOT/$repo" && yalc publish)
+}
+
+cmd_publish() {
+  local repo="${1:?usage: publish <repo>}"
+  have "$repo" || die "repo '$repo' is not cloned"
+  with_dev_version "$repo" do_build_publish "$repo"
+}
+
+do_watch() {
+  local repo="$1"
+  has_build "$repo" && (cd "$ROOT/$repo" && bun run build) || true
+  echo "▶ yalc publish --watch ($repo). NOTE: rebuild manually if it has a build step."
+  (cd "$ROOT/$repo" && yalc publish --watch)
+}
+
+cmd_watch() {
+  local repo="${1:?usage: watch <repo>}"
+  have "$repo" || die "repo '$repo' is not cloned"
+  # The stamp is held for the whole watch session (one version for the session,
+  # republished in place on each change) and released by the trap on Ctrl-C.
+  with_dev_version "$repo" do_watch "$repo"
+}
+
+cmd_link() {
+  local consumer="${1:?usage: link <consumer> <dep>}"
+  local dep="${2:?usage: link <consumer> <dep>}"
+  have "$consumer" || die "consumer '$consumer' is not cloned"
+  local name; name="$(pkgname "$dep")"
+  echo "▶ yalc add $name (in $consumer)"
+  (cd "$ROOT/$consumer" && yalc add "$name")
+}
+
+do_build_push() {
+  local repo="$1"
+  has_build "$repo" && { echo "▶ build ($repo)"; (cd "$ROOT/$repo" && bun run build); }
+  echo "▶ yalc push ($repo -> $(pkgname "$repo"))"
+  (cd "$ROOT/$repo" && yalc push)
+}
+
+cmd_push() {
+  local repo="${1:?usage: push <repo>}"
+  have "$repo" || die "repo '$repo' is not cloned"
+  with_dev_version "$repo" do_build_push "$repo"
+}
+
+cmd_unlink() {
+  local consumer="${1:?usage: unlink <consumer>}"
+  have "$consumer" || die "consumer '$consumer' is not cloned"
+  echo "▶ yalc remove --all + bun install (in $consumer)"
+  (cd "$ROOT/$consumer" && yalc remove --all || true; bun install)
+}
+
+cmd_rebuild() {
+  [ $# -ge 1 ] || die "usage: rebuild <repo> [repo ...]   (list bottom-up, e.g. core eval runframe cli)"
+  local repo dep name
+  for repo in "$@"; do
+    have "$repo" || die "repo '$repo' is not cloned"
+    echo "=== rebuilding $repo ($(pkgname "$repo")) ==="
+    # Link any dependency that is also a cloned repo in this workspace.
+    while IFS= read -r dep; do
+      [ -n "$dep" ] || continue
+      name="$(repo_for_pkg "$dep")"
+      [ -n "$name" ] || continue            # dep is not a local repo
+      [ "$name" = "$repo" ] && continue      # don't self-link
+      echo "  ↳ yalc add $dep (local)"
+      (cd "$ROOT/$repo" && yalc add "$dep" >/dev/null)
+    done < <(dep_names "$repo")
+    # Build (re-inlines any linked deps) then push to downstream consumers.
+    # Stamping starts here, AFTER the `yalc add` loop above: the stamp restores
+    # package.json from a backup, which would otherwise revert those links.
+    with_dev_version "$repo" do_rebuild_one "$repo"
+  done
+  echo "✓ rebuilt: $*"
+}
+
+do_rebuild_one() {
+  local repo="$1"
+  if has_build "$repo"; then
+    echo "  ↳ bun run build"; (cd "$ROOT/$repo" && bun run build)
+  fi
+  echo "  ↳ yalc push"; (cd "$ROOT/$repo" && yalc push)
+}
+
+# Audit yalc links from the CONSUMER side — the three ways a link goes wrong:
+#   1. the linked build claims a version npm can also publish (the collision this
+#      whole stamping scheme exists to prevent);
+#   2. node_modules holds a plain npm copy, i.e. an install silently replaced the
+#      link (no yalcSig present);
+#   3. node_modules is a yalc copy but an older one than .yalc/ (missed push).
+cmd_doctor() {
+  local targets=("$@") t dir problems=0 checked=0
+  if [ ${#targets[@]} -eq 0 ]; then
+    while IFS= read -r t; do [ -n "$t" ] && [ -d "$t" ] && targets+=("$t"); done < <(yalc_installations)
+  fi
+  [ ${#targets[@]} -gt 0 ] || { echo "no yalc-linked projects found"; return 0; }
+  # package name -> workspace repo, built once (a node start per repo is slow to
+  # repeat for every link).
+  local index; index="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-idx.XXXXXX")"
+  local d r n
+  for d in "$ROOT"/*/; do
+    [ -d "$d/.git" ] || continue
+    r="$(basename "$d")"
+    n="$(pj_field "$d/package.json" name)"
+    [ -n "$n" ] && printf '%s\t%s\n' "$n" "$r" >> "$index"
+  done
+  for t in "${targets[@]}"; do
+    if have "$t"; then dir="$ROOT/$t"
+    elif [ -d "$t" ]; then dir="$(cd "$t" && pwd)"
+    else echo "⚠ $t: not a cloned repo or a directory"; continue; fi
+    [ -f "$dir/yalc.lock" ] || continue
+    echo "• ${dir/#$HOME/~}"
+    local name ydir nmdir yver ysig nver nsig owner
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      checked=$((checked + 1))
+      owner="$(grep -F "$(printf '%s\t' "$name")" "$index" 2>/dev/null | head -1 | cut -f2)"
+      ydir="$dir/.yalc/$name"; nmdir="$dir/node_modules/$name"
+      yver="$(pj_field "$ydir/package.json" version)"
+      ysig="$(pj_field "$ydir/package.json" yalcSig)"
+      nver="$(pj_field "$nmdir/package.json" version)"
+      nsig="$(pj_field "$nmdir/package.json" yalcSig)"
+      if [ -z "$yver" ]; then
+        printf '    ✗ %-38s no .yalc payload — run: (cd %s && yalc add %s)\n' "$name" "$dir" "$name"
+        problems=$((problems + 1)); continue
+      fi
+      if [ -z "$nver" ]; then
+        printf '    ✗ %-38s linked but not installed — run: (cd %s && bun install)\n' "$name" "$dir"
+        problems=$((problems + 1)); continue
+      fi
+      # No yalcSig in node_modules => a registry tarball, not the link. This is
+      # the silent failure: an install resolved the name from cache/npm and the
+      # local build vanished without any error.
+      if [ -z "$nsig" ]; then
+        printf '    ✗ %-38s node_modules holds an npm copy (%s), not the link — run: (cd %s && yalc add %s)\n' \
+          "$name" "$nver" "$dir" "$name"
+        problems=$((problems + 1)); continue
+      fi
+      if [ "$nsig" != "$ysig" ]; then
+        printf '    ✗ %-38s stale: node_modules %s != .yalc %s — re-push the producing repo\n' \
+          "$name" "$nver" "$yver"
+        problems=$((problems + 1)); continue
+      fi
+      case "$yver" in
+        *-local.*) printf '    ✓ %-38s %s\n' "$name" "$yver" ;;
+        *)
+          printf '    ⚠ %-38s %s — unstamped: this local build claims a version npm can also mint. Re-publish: ./tsc-dev push %s\n' \
+            "$name" "$yver" "${owner:-<repo>}"
+          problems=$((problems + 1)) ;;
+      esac
+    done < <(yalc_lock_pkgs "$dir")
+  done
+  rm -f "$index"
+  if [ "$problems" -eq 0 ]; then
+    echo "✓ $checked link(s) checked, no problems"
+  else
+    echo "✗ $checked link(s) checked, $problems problem(s)"
+    return 1
+  fi
+}
+
+# Stamped versions each get their own store directory, so the store grows one
+# entry per publish. Prune only `-local.*` entries: a released version in the
+# store may be a legitimate `yalc add <pkg>@<version>` pin.
+cmd_prune_store() {
+  local store="$HOME/.yalc/packages" keep=2 filters=() pkgdirs=() d s rel
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --keep) keep="${2:?usage: prune-store [--keep N] [pkg...]}"; shift 2 ;;
+      --keep=*) keep="${1#*=}"; shift ;;
+      *) filters+=("$1"); shift ;;
+    esac
+  done
+  [ -d "$store" ] || { echo "no yalc store at $store"; return 0; }
+  for d in "$store"/*/; do
+    [ -d "$d" ] || continue
+    case "$(basename "$d")" in
+      @*) for s in "$d"*/; do [ -d "$s" ] && pkgdirs+=("$s"); done ;;
+      *) pkgdirs+=("$d") ;;
+    esac
+  done
+  [ ${#pkgdirs[@]} -gt 0 ] || { echo "yalc store is empty"; return 0; }
+  local removed=0 kept=0 name vers n i f match
+  for d in "${pkgdirs[@]}"; do
+    rel="${d#$store/}"; name="${rel%/}"
+    if [ ${#filters[@]} -gt 0 ]; then
+      match=0
+      for f in "${filters[@]}"; do [ "$f" = "$name" ] && match=1; done
+      [ "$match" = 1 ] || continue
+    fi
+    vers=()
+    while IFS= read -r s; do [ -n "$s" ] && vers+=("$s"); done < <(ls -1 "$d" 2>/dev/null | grep -- '-local\.' | sort)
+    n=${#vers[@]}
+    if [ "$n" -le "$keep" ]; then kept=$((kept + n)); continue; fi
+    i=0
+    while [ "$i" -lt $((n - keep)) ]; do
+      rm -rf "$d/${vers[$i]}"
+      echo "  ✗ rm $name@${vers[$i]}"
+      removed=$((removed + 1)); i=$((i + 1))
+    done
+    kept=$((kept + keep))
+  done
+  echo "✓ removed $removed stale local build(s), kept $kept (released versions untouched)"
+}
+
+cmd_dev() {
+  have cli || die "clone+install the cli first: ./tsc-dev clone cli && ./tsc-dev install cli"
+  local cli_main="$ROOT/cli/cli/main.ts"
+  [ -f "$cli_main" ] || die "cli entry not found at $cli_main (is the cli repo cloned?)"
+  local arg="" local_runframe=0
+  local passthru=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --local) local_runframe=1 ;;
+      -*) passthru+=("$1") ;;
+      *) if [ -z "$arg" ]; then arg="$1"; else passthru+=("$1"); fi ;;
+    esac
+    shift
+  done
+  [ -n "$arg" ] || arg="$PWD"
+  local projdir file=""
+  if [ -d "$arg" ]; then
+    projdir="$(cd "$arg" && pwd)"
+  elif [ -f "$arg" ]; then
+    projdir="$(cd "$(dirname "$arg")" && pwd)"; file="$(basename "$arg")"
+  else
+    die "no such project dir or file: $arg"
+  fi
+  # --local: serve YOUR workspace's locally-built runframe standalone (which embeds
+  # your local eval+core after `./tsc-dev rebuild core eval runframe`). The cli
+  # re-reads this file on every request, so after rebuilding runframe you just
+  # refresh the browser — no restart needed.
+  if [ "$local_runframe" = 1 ]; then
+    local sa="$ROOT/runframe/dist/standalone.min.js"
+    local worker="$ROOT/eval/dist/webworker/entrypoint.js"
+    [ -f "$sa" ] || die "local runframe not built. First run: ./tsc-dev rebuild core eval runframe"
+    local served="$sa"
+    # The raw runframe standalone has an UNFILLED eval-worker placeholder (the
+    # tscircuit umbrella normally fills it). If we don't fill it, the browser
+    # falls back to the CDN/published eval — not our rebuilt one. Fill it with
+    # the local eval webworker so `tsci dev --local` truly uses local eval+core.
+    if [ -f "$worker" ] && grep -q "INJECT_TSCIRCUIT_EVAL_WEB_WORKER_BLOB_URL" "$sa"; then
+      served="$ROOT/runframe/dist/standalone.local.min.js"
+      node -e 'const fs=require("fs");const sa=fs.readFileSync(process.argv[1],"utf8");const w=fs.readFileSync(process.argv[2],"utf8");const b=Buffer.from(w).toString("base64");const e=`URL.createObjectURL(new Blob([atob("${b}")],{type:"application/javascript"}))`;fs.writeFileSync(process.argv[3], sa.replace(/"<--INJECT_TSCIRCUIT_EVAL_WEB_WORKER_BLOB_URL-->"/g,e));' "$sa" "$worker" "$served"
+      echo "  ⊙ filled eval-worker placeholder with local eval"
+    fi
+    export RUNFRAME_STANDALONE_FILE_PATH="$served"
+    echo "  ⊙ serving LOCAL runframe: $served"
+  fi
+  # Run with cwd = the project (mimics `tsci dev`): projectDir resolves correctly,
+  # your package.json/tscircuit.config/entrypoint are respected, and bun still
+  # resolves the cli's own lib/* aliases from cli/tsconfig.json. Extra flags
+  # (e.g. --port 3030) are forwarded to `tsci dev`.
+  echo "▶ tsci dev (from source) in $projdir${file:+  (file: $file)}"
+  (cd "$projdir" && exec bun --hot "$cli_main" dev ${file:+"$file"} ${passthru[@]+"${passthru[@]}"})
+}
+
+cmd_status() {
+  for d in "$ROOT"/*/; do
+    [ -d "$d/.git" ] || continue
+    local r; r="$(basename "$d")"
+    local name; name="$(node -p "require('$d/package.json').name" 2>/dev/null || echo '?')"
+    printf '• %-28s %s\n' "$r" "$name"
+    if [ -f "$d/yalc.lock" ]; then
+      node -p "Object.keys(require('$d/yalc.lock').packages||{}).map(p=>'    ↳ linked: '+p).join('\n')" 2>/dev/null || true
+    fi
+  done
+}
+
+# The forks that carry the parametric-enclosure work, in release order (see
+# `create-fdm-enclosure/README.md`). Downstream rebuild-only repos (eval,
+# runframe, cli) and unrelated forks (circuit-json-util, exec) are deliberately
+# excluded — they carry no patch branch for this effort.
+SYNC_FORK_REPOS=(
+  circuit-json
+  props
+  create-fdm-enclosure
+  circuit-json-to-gltf
+  infer-cable-insertion-point
+  3d-viewer
+  core
+  rfc
+)
+
+# Patch branch per repo; anything unlisted uses SYNC_FORK_DEFAULT_BRANCH.
+SYNC_FORK_DEFAULT_BRANCH="feat/parametric-enclosures"
+sync_fork_branch_for() {
+  case "$1" in
+    infer-cable-insertion-point) echo "fix/explicit-insertion-direction" ;;
+    *) echo "$SYNC_FORK_DEFAULT_BRANCH" ;;
+  esac
+}
+
+# After a successful fork rebase+push, move the local branch onto the rewritten
+# commits. Safe by construction: the rebase source is always a superset of the
+# local branch, so no local commit can be dropped. Uncommitted edits are
+# stashed and reapplied.
+sync_local_branch() {
+  local dir="$1" branch="$2" new_head="$3" cur
+  git -C "$dir" show-ref --verify --quiet "refs/heads/$branch" || return 0
+  if [ "$(git -C "$dir" rev-parse "$branch")" = "$new_head" ]; then return 0; fi
+  cur="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ "$cur" != "$branch" ]; then
+    git -C "$dir" branch -f "$branch" "$new_head"
+    echo "  ↳ local $branch moved to rebased head (not checked out)"
+  elif git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet; then
+    git -C "$dir" reset --hard "$new_head" -q
+    echo "  ↳ local $branch reset to rebased head"
+  else
+    # Dirty trees are the norm here (yalc rewrites package.json), so stash
+    # rather than refuse — otherwise the local branch could never converge.
+    # Untracked files survive reset --hard, so only tracked changes are stashed.
+    if git -C "$dir" stash push -q -m "tsc-dev sync-forks autostash"; then
+      git -C "$dir" reset --hard "$new_head" -q
+      if git -C "$dir" stash pop -q 2>/dev/null; then
+        echo "  ↳ local $branch reset to rebased head (local edits reapplied)"
+      else
+        echo "  ⚠ local $branch reset, but reapplying edits conflicted —"
+        echo "      resolve then drop:  git -C $dir status && git -C $dir stash drop"
+      fi
+    else
+      echo "  ⚠ local $branch left at $(git -C "$dir" rev-parse --short "$branch") (couldn't stash) — run:"
+      echo "      git -C $dir reset --hard $(git -C "$dir" rev-parse --short "$new_head")"
+    fi
+  fi
+}
+
+# Keep local main usable as a branching point. Fast-forward only: a local main
+# that is ahead of or diverged from upstream is reported, never rewritten.
+fast_forward_local_main() {
+  local dir="$1" cur
+  git -C "$dir" show-ref --verify --quiet refs/heads/main || return 0
+  git -C "$dir" show-ref --verify --quiet refs/remotes/origin/main || return 0
+  if [ "$(git -C "$dir" rev-parse main)" = "$(git -C "$dir" rev-parse origin/main)" ]; then return 0; fi
+  if ! git -C "$dir" merge-base --is-ancestor main origin/main; then
+    echo "  ⚠ local main has commits not on origin/main — left alone"
+    return 0
+  fi
+  cur="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ "$cur" != "main" ]; then
+    git -C "$dir" branch -f main origin/main
+    echo "  ↳ local main fast-forwarded to $(git -C "$dir" rev-parse --short origin/main)"
+  elif git -C "$dir" merge --ff-only origin/main --quiet 2>/dev/null; then
+    echo "  ↳ local main fast-forwarded to $(git -C "$dir" rev-parse --short origin/main)"
+  else
+    echo "  ⚠ local main checked out with local changes — run: git -C $dir merge --ff-only origin/main"
+  fi
+}
+
+# Keep each fork updated to head of upstream main with our patch branch on top.
+# Rebase in a temporary worktree so dirty checkouts and active yalc links remain
+# untouched. Sync the fork's default branch even when no patch branch exists.
+# Set SYNC_FORK_BRANCH to force one branch name for every repo.
+cmd_sync_forks() {
+  command -v gh >/dev/null 2>&1 || die "sync-forks needs the GitHub CLI (gh)"
+  local repos=("$@"); [ ${#repos[@]} -eq 0 ] && repos=("${SYNC_FORK_REPOS[@]}")
+  local repo dir fork_url fork_slug out branch branch_ref sync_root sync_dir conflict_files
+  local local_ref fork_ref branch_src diverged new_head fork_fetch_ok
+  for repo in "${repos[@]}"; do
+    have "$repo" || { echo "⚠ $repo: not cloned — skipping"; continue; }
+    branch="${SYNC_FORK_BRANCH:-$(sync_fork_branch_for "$repo")}"
+    dir="$ROOT/$repo"
+    echo "=== $repo ($branch) ==="
+    git -C "$dir" remote | grep -qx fork \
+      || { echo "  ⚠ no 'fork' remote (gh repo fork tscircuit/$repo --clone=false && git -C $dir remote add fork <url>)"; continue; }
+    git -C "$dir" fetch origin --quiet || { echo "  ✗ fetch failed — skipping"; continue; }
+    fork_fetch_ok=1
+    if ! git -C "$dir" fetch fork --prune --quiet; then
+      echo "  ✗ fork fetch failed — skipping patch rebase"
+      fork_fetch_ok=0
+    fi
+
+    local_ref=""; fork_ref=""; branch_ref=""; branch_src=""; diverged=0
+    if [ "$fork_fetch_ok" -eq 1 ]; then
+      if git -C "$dir" show-ref --verify --quiet "refs/heads/$branch"; then
+        local_ref="refs/heads/$branch"
+      fi
+      if git -C "$dir" show-ref --verify --quiet "refs/remotes/fork/$branch"; then
+        fork_ref="refs/remotes/fork/$branch"
+      fi
+
+      # Rebase whichever ref is a strict superset, so local-only commits are
+      # never silently dropped (and fork-only commits are never force-pushed
+      # away). Refuse to guess when the two have genuinely diverged.
+      if [ -n "$local_ref" ] && [ -n "$fork_ref" ]; then
+        if git -C "$dir" merge-base --is-ancestor "$fork_ref" "$local_ref"; then
+          branch_ref="$local_ref"; branch_src="local"
+        elif git -C "$dir" merge-base --is-ancestor "$local_ref" "$fork_ref"; then
+          branch_ref="$fork_ref"; branch_src="fork"
+        else
+          diverged=1
+        fi
+      elif [ -n "$local_ref" ]; then
+        branch_ref="$local_ref"; branch_src="local"
+      elif [ -n "$fork_ref" ]; then
+        branch_ref="$fork_ref"; branch_src="fork"
+      fi
+    fi
+
+    if [ "$diverged" -eq 1 ]; then
+      echo "  ✗ local $branch and fork/$branch have diverged — refusing to guess."
+      echo "      reconcile, then re-run:  git -C $dir rebase fork/$branch"
+    elif [ -n "$branch_ref" ]; then
+      echo "  ↳ rebasing from $branch_src ($(git -C "$dir" rev-parse --short "$branch_ref"))"
+      sync_root="$(mktemp -d "${TMPDIR:-/tmp}/tsc-dev-sync-${repo}.XXXXXX")"
+      sync_dir="$sync_root/worktree"
+      if git -C "$dir" worktree add --detach "$sync_dir" "$branch_ref" --quiet; then
+        if out="$(git -C "$sync_dir" rebase origin/main 2>&1)"; then
+          echo "  ↳ rebased onto origin/main ($(git -C "$dir" rev-parse --short origin/main))"
+          if out="$(git -C "$sync_dir" push --force-with-lease fork "HEAD:refs/heads/$branch" 2>&1)"; then
+            echo "  ↳ push fork: $(printf '%s' "$out" | tail -1 | sed 's/^[[:space:]]*//')"
+            new_head="$(git -C "$sync_dir" rev-parse HEAD)"
+            sync_local_branch "$dir" "$branch" "$new_head"
+          else
+            echo "  ✗ push fork: $(printf '%s' "$out" | tail -1 | sed 's/^[[:space:]]*//')"
+          fi
+        else
+          conflict_files="$(git -C "$sync_dir" diff --name-only --diff-filter=U | paste -sd, -)"
+          git -C "$sync_dir" rebase --abort 2>/dev/null || true
+          echo "  ✗ rebase conflict${conflict_files:+ in $conflict_files} — patch branch unchanged"
+        fi
+        git -C "$dir" worktree remove --force "$sync_dir" >/dev/null 2>&1 || true
+      else
+        echo "  ✗ couldn't create isolated worktree — skipping patch rebase"
+      fi
+      rmdir "$sync_root" 2>/dev/null || true
+    else
+      if [ "$fork_fetch_ok" -eq 1 ]; then
+        echo "  ⚠ no '$branch' branch on fork or locally — skipping patch rebase"
+      fi
+    fi
+
+    fork_url="$(git -C "$dir" remote get-url fork)"
+    fork_slug="$(printf '%s' "$fork_url" | sed -E 's#.*github\.com[:/]([^/]+/[^/.]+)(\.git)?/?$#\1#')"
+    if out="$(gh repo sync "$fork_slug" 2>&1)"; then
+      out="$(printf '%s' "$out" | tail -1 | sed 's/^[[:space:]]*//')"
+      echo "  ↳ sync $fork_slug main: ${out:-✓ up to date with upstream}"
+    else
+      echo "  ↳ sync $fork_slug main: ✗ $(printf '%s' "$out" | tail -1 | sed 's/^[[:space:]]*//')"
+    fi
+    fast_forward_local_main "$dir"
+  done
+}
+
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    clone)   cmd_clone "$@" ;;
+    clone-group) cmd_clone_group "$@" ;;
+    clone-deps)  cmd_clone_deps "$@" ;;
+    search)  cmd_search "$@" ;;
+    install) cmd_install "$@" ;;
+    publish) cmd_publish "$@" ;;
+    watch)   cmd_watch "$@" ;;
+    link)    cmd_link "$@" ;;
+    push)    cmd_push "$@" ;;
+    unlink)  cmd_unlink "$@" ;;
+    doctor)  cmd_doctor "$@" ;;
+    prune-store) cmd_prune_store "$@" ;;
+    rebuild) cmd_rebuild "$@" ;;
+    dev)     cmd_dev "$@" ;;
+    pkgname) pkgname "${1:?usage: pkgname <repo>}" ;;
+    status)  cmd_status ;;
+    sync-forks) cmd_sync_forks "$@" ;;
+    ""|-h|--help|help) sed -n '2,/^# Examples:/p' "${BASH_SOURCE[0]}" | sed '$d;s/^# \{0,1\}//' ;;
+    *) die "unknown command '$cmd' (try: ./tsc-dev help)" ;;
+  esac
+}
+main "$@"

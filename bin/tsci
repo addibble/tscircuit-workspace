@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# tsci (local) — a `tsci` that includes our local eval + core fixes.
+#
+# It runs the workspace CLI source (cli/cli/main.ts), whose node_modules has
+# yalc-linked LOCAL builds of:
+#   - @tscircuit/core  (exports `extendCatalogue` so `<enclosure>` can register)
+#   - @tscircuit/eval  (handles `.cjs` node_modules like jscad-planner)
+#
+# Use it exactly like `tsci`, from your project directory, e.g.:
+#   cd ../tscdevtest && /Users/drew/src/tscircuit/bin/tsci build
+#   cd ../tscdevtest && /Users/drew/src/tscircuit/bin/tsci export -f stl   # etc.
+#
+# Node commands (build, export, check, ...) get the fixes via these links.
+#
+# NOTE on `dev`: the browser path ALSO needs the local runframe standalone +
+# eval worker, which this wrapper does NOT inject. For `tsci dev` use
+#   ./tsc-dev dev <project> --local
+# which fills the eval-worker placeholder. This wrapper is for the Node path.
+#
+set -euo pipefail
+ROOT="/Users/drew/src/tscircuit"
+CLI_MAIN="$ROOT/cli/cli/main.ts"
+[ -f "$CLI_MAIN" ] || { echo "cli entry not found: $CLI_MAIN" >&2; exit 1; }
+exec bun "$CLI_MAIN" "$@"
