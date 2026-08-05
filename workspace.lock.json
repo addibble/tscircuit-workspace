@@ -1,6 +1,6 @@
 {
   "$comment": "Snapshot of a build environment: every cloned repo's clone URL, branch and SHA plus the yalc links between them. Reproduce with `./tsc-dev env adopt <owner>`. Regenerate with `./tsc-dev freeze`.",
-  "generatedAt": "2026-08-05T18:41:33.234Z",
+  "generatedAt": "2026-08-05T18:53:45.240Z",
   "tool": {
     "workspaceCommit": "cd946ed2d83c43cfc4a76d12446dd88d5ae84f16",
     "bun": "1.3.14",
@@ -666,12 +666,13 @@
     },
     "skill": {
       "branch": "feat/enclosure-elements",
-      "sha": "4fefcab5b7beb273c8b7e25a730cd68d14e1ac90",
+      "sha": "1b293b848c259eea907341895c716ede9dd64a1d",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/skill",
       "cloneUrl": "https://github.com/tscircuit/skill",
       "local": false,
       "remotes": {
+        "fork": "https://github.com/addibble/skill.git",
         "origin": "https://github.com/tscircuit/skill"
       },
       "dirty": false
