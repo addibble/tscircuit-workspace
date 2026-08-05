@@ -1,8 +1,8 @@
 {
-  "$comment": "Snapshot of a build environment: every cloned repo's remote/branch/SHA plus the yalc links between them. Reproduce with `./tsc-dev env adopt <owner>`. Regenerate with `./tsc-dev freeze`.",
-  "generatedAt": "2026-08-05T17:36:26.032Z",
+  "$comment": "Snapshot of a build environment: every cloned repo's clone URL, branch and SHA plus the yalc links between them. Reproduce with `./tsc-dev env adopt <owner>`. Regenerate with `./tsc-dev freeze`.",
+  "generatedAt": "2026-08-05T18:18:39.540Z",
   "tool": {
-    "workspaceCommit": "a139e3a4c55d4dfa4b7fc4b3fb2512318ffd2d79",
+    "workspaceCommit": "f872fb198dd2e370049626e8fad6c19146cfeb92",
     "bun": "1.3.14",
     "node": "v26.0.0"
   },
@@ -12,6 +12,8 @@
       "sha": "c894d65edec5d2326af2b361e0bbede1cb7121b4",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/3d-viewer",
+      "cloneUrl": "https://github.com/tscircuit/3d-viewer",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/3d-viewer.git",
         "origin": "https://github.com/tscircuit/3d-viewer"
@@ -23,6 +25,8 @@
       "sha": "5a0f4ea791bfbf8a505ac4d2f51a7628a36811fe",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/alphabet",
+      "cloneUrl": "https://github.com/tscircuit/alphabet",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/alphabet"
       },
@@ -33,6 +37,8 @@
       "sha": "d03343054dffe6ea39e2442dac6b5c6e799d96af",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/bpc-graph",
+      "cloneUrl": "https://github.com/tscircuit/bpc-graph",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/bpc-graph"
       },
@@ -43,6 +49,8 @@
       "sha": "bac96296ccc02be757a72f6254ae2d54d155b362",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/breakout-point-solver",
+      "cloneUrl": "https://github.com/tscircuit/breakout-point-solver",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/breakout-point-solver"
       },
@@ -53,6 +61,8 @@
       "sha": "2d16c78236661bae48f9569ffa06bd903f355730",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/bun-match-svg",
+      "cloneUrl": "https://github.com/tscircuit/bun-match-svg",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/bun-match-svg"
       },
@@ -63,6 +73,8 @@
       "sha": "a44e1edc42fec857399421f60973a05923a1d969",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/calculate-cell-boundaries",
+      "cloneUrl": "https://github.com/tscircuit/calculate-cell-boundaries",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/calculate-cell-boundaries"
       },
@@ -73,6 +85,8 @@
       "sha": "404e08ce8412ddc83bbbbbe9771a2f9e3f8d0890",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/calculate-elbow",
+      "cloneUrl": "https://github.com/tscircuit/calculate-elbow",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/calculate-elbow"
       },
@@ -83,6 +97,8 @@
       "sha": "489d9dd4c32fc9c918ce6b79e02a7cceeec6db41",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/calculate-packing",
+      "cloneUrl": "https://github.com/tscircuit/calculate-packing",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/calculate-packing"
       },
@@ -93,6 +109,8 @@
       "sha": "ff5222df2c170255e6b90695c68cf1bbab7a0608",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/checks",
+      "cloneUrl": "https://github.com/tscircuit/checks",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/checks",
         "origin": "https://github.com/tscircuit/checks"
@@ -104,6 +122,8 @@
       "sha": "a3058d2951785c21311593920c189fbdb48fec59",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/circuit-json.git",
+      "cloneUrl": "https://github.com/tscircuit/circuit-json",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/circuit-json.git",
         "origin": "https://github.com/tscircuit/circuit-json"
@@ -115,6 +135,8 @@
       "sha": "df63f546bf6c0206bb3864cd8282c07d16b97630",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/circuit-json-to-bpc",
+      "cloneUrl": "https://github.com/tscircuit/circuit-json-to-bpc",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/circuit-json-to-bpc"
       },
@@ -125,6 +147,8 @@
       "sha": "78e92fd1992243ec4b6ad7aa5e13ee50af1f5938",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/circuit-json-to-connectivity-map",
+      "cloneUrl": "https://github.com/tscircuit/circuit-json-to-connectivity-map",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/circuit-json-to-connectivity-map"
       },
@@ -135,6 +159,8 @@
       "sha": "e1f14efaba361b922f7a3ced80065f5734de3107",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/circuit-json-to-gltf",
+      "cloneUrl": "https://github.com/tscircuit/circuit-json-to-gltf",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/circuit-json-to-gltf.git",
         "origin": "https://github.com/tscircuit/circuit-json-to-gltf"
@@ -146,6 +172,8 @@
       "sha": "3624c360d94262f8cad94b61f15cdc1fb5a96844",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/circuit-json-to-simple-3d",
+      "cloneUrl": "https://github.com/tscircuit/circuit-json-to-simple-3d",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/circuit-json-to-simple-3d"
       },
@@ -156,6 +184,8 @@
       "sha": "09e77af33979b8df9dbf3eac53ab3faaac2471f9",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/circuit-json-to-spice",
+      "cloneUrl": "https://github.com/tscircuit/circuit-json-to-spice",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/circuit-json-to-spice"
       },
@@ -166,6 +196,8 @@
       "sha": "18e16ca12d3b5eb63f30a5da1689edf48b5087db",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/circuit-json-util",
+      "cloneUrl": "https://github.com/tscircuit/circuit-json-util",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/circuit-json-util.git",
         "origin": "https://github.com/tscircuit/circuit-json-util"
@@ -177,6 +209,8 @@
       "sha": "cd9253ce7d1ff114a1587e52c37710446b696ac2",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/circuit-to-svg",
+      "cloneUrl": "https://github.com/tscircuit/circuit-to-svg",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/circuit-to-svg"
       },
@@ -187,6 +221,8 @@
       "sha": "a2cec1cb929219168342e113bb86ffcae8fd60c6",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/cli",
+      "cloneUrl": "https://github.com/tscircuit/cli",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/cli.git",
         "origin": "https://github.com/tscircuit/cli"
@@ -198,6 +234,8 @@
       "sha": "899e60a92f76d46d8e20940ea1d42ad41fba3ac0",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/common",
+      "cloneUrl": "https://github.com/tscircuit/common",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/common"
       },
@@ -208,6 +246,8 @@
       "sha": "af4be36fece56c3652d6d68a9c1f48ba96299de5",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/connectivity-map",
+      "cloneUrl": "https://github.com/tscircuit/connectivity-map",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/connectivity-map"
       },
@@ -218,6 +258,8 @@
       "sha": "20b7a02c88a0b8dc865305778c81492ef7cb5b7a",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/copper-pour-solver",
+      "cloneUrl": "https://github.com/tscircuit/copper-pour-solver",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/copper-pour-solver"
       },
@@ -228,6 +270,8 @@
       "sha": "6c0c3914370ba5dc94dbf552906f44db9cc747cd",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/core.git",
+      "cloneUrl": "https://github.com/tscircuit/core.git",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/core.git",
         "origin": "https://github.com/tscircuit/core.git"
@@ -239,6 +283,8 @@
       "sha": "b3536318750cf34180ec38aaa9e8d52039a7f740",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/create-fdm-enclosure.git",
+      "cloneUrl": "https://github.com/tscircuit/create-fdm-enclosure",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/create-fdm-enclosure.git",
         "origin": "https://github.com/tscircuit/create-fdm-enclosure"
@@ -250,18 +296,10 @@
       "sha": "a89b7cb8b554d264569bc913af1559ad2d09505a",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/docs.git",
+      "cloneUrl": "https://github.com/tscircuit/docs.git",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/docs.git"
-      },
-      "dirty": false
-    },
-    "enclosure": {
-      "branch": "",
-      "sha": "",
-      "remote": "origin",
-      "remoteUrl": "https://github.com/tscircuit/enclosure",
-      "remotes": {
-        "origin": "https://github.com/tscircuit/enclosure"
       },
       "dirty": false
     },
@@ -270,6 +308,8 @@
       "sha": "f839dd5ad3944d401f7e4e85eb1bef4c2ba275ee",
       "remote": "origin",
       "remoteUrl": "",
+      "cloneUrl": "",
+      "local": true,
       "remotes": {},
       "dirty": true
     },
@@ -278,6 +318,8 @@
       "sha": "f6528f46c69197a36381134ecce1b6b10be62b74",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/eval",
+      "cloneUrl": "https://github.com/tscircuit/eval",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/eval.git",
         "origin": "https://github.com/tscircuit/eval",
@@ -290,6 +332,8 @@
       "sha": "ef7f70c123e97df8e8f901b9b578d4fa8de611c9",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/footprinter",
+      "cloneUrl": "https://github.com/tscircuit/footprinter",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/footprinter"
       },
@@ -300,6 +344,8 @@
       "sha": "e6a457561ee7b06e93b91b54bd16e51dbe984e44",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/format-si-unit",
+      "cloneUrl": "https://github.com/tscircuit/format-si-unit",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/format-si-unit"
       },
@@ -310,6 +356,8 @@
       "sha": "1c0db0e2e9bcf8762e3c6b5e90e6ad96cb2d5557",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/graphics-debug",
+      "cloneUrl": "https://github.com/tscircuit/graphics-debug",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/graphics-debug"
       },
@@ -320,6 +368,8 @@
       "sha": "cd8f6019e8ead2d831323b8ba9b945d87fa9e708",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/handbook.git",
+      "cloneUrl": "https://github.com/tscircuit/handbook.git",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/handbook.git"
       },
@@ -330,6 +380,8 @@
       "sha": "9b97822a9c319c97e34202069b2573d2dc821bc9",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/image-utils",
+      "cloneUrl": "https://github.com/tscircuit/image-utils",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/image-utils"
       },
@@ -340,6 +392,8 @@
       "sha": "4e55d0725153b04a83851d0f0a5b817e359b7c73",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/infer-cable-insertion-point",
+      "cloneUrl": "https://github.com/tscircuit/infer-cable-insertion-point",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/infer-cable-insertion-point.git",
         "origin": "https://github.com/tscircuit/infer-cable-insertion-point"
@@ -351,6 +405,8 @@
       "sha": "e08af159db01a37db007e33f0a7268d0e4a279a5",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/jlcpcb-manufacturing-specs",
+      "cloneUrl": "https://github.com/tscircuit/jlcpcb-manufacturing-specs",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/jlcpcb-manufacturing-specs"
       },
@@ -361,6 +417,8 @@
       "sha": "dbac8b45b234574c1144df9c1cef667e4715f4eb",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/jscad-electronics.git",
+      "cloneUrl": "https://github.com/tscircuit/jscad-electronics",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/jscad-electronics.git",
         "origin": "https://github.com/tscircuit/jscad-electronics"
@@ -372,6 +430,8 @@
       "sha": "02d849d0a6bb1aaabbd614bb8998611fd4e434de",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/jscad-fiber",
+      "cloneUrl": "https://github.com/tscircuit/jscad-fiber",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/jscad-fiber"
       },
@@ -382,6 +442,8 @@
       "sha": "5bc039d3f6edf3f418751f46050ce52105694f7b",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/jscad-planner",
+      "cloneUrl": "https://github.com/tscircuit/jscad-planner",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/jscad-planner"
       },
@@ -392,6 +454,8 @@
       "sha": "b820deacccc68e3fec9e84bd3a58b99884460280",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/jscad-to-gltf",
+      "cloneUrl": "https://github.com/tscircuit/jscad-to-gltf",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/jscad-to-gltf"
       },
@@ -402,6 +466,8 @@
       "sha": "17b438dd11c7226dcf401ef9596c55daf73c2249",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/kicad-to-circuit-json",
+      "cloneUrl": "https://github.com/tscircuit/kicad-to-circuit-json",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/kicad-to-circuit-json"
       },
@@ -412,6 +478,8 @@
       "sha": "c48d488029937112c376223ca34ebd9e03ba765b",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/kicadts",
+      "cloneUrl": "https://github.com/tscircuit/kicadts",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/kicadts"
       },
@@ -422,6 +490,8 @@
       "sha": "cd98af7b6e1306159e8587c233acbb5758f59ebf",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/krt-wasm",
+      "cloneUrl": "https://github.com/tscircuit/krt-wasm",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/krt-wasm"
       },
@@ -432,6 +502,8 @@
       "sha": "02c0b81399055bbe552379c0c41c272284d1bb06",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/matchpack",
+      "cloneUrl": "https://github.com/tscircuit/matchpack",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/matchpack"
       },
@@ -442,6 +514,8 @@
       "sha": "cadf0e53fdd66c38c7f32c26b74bf071b9f7b950",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/math-utils",
+      "cloneUrl": "https://github.com/tscircuit/math-utils",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/math-utils"
       },
@@ -452,6 +526,8 @@
       "sha": "0fd5653aed1251f8e40acf1a6017f4482514340a",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/minicssgrid",
+      "cloneUrl": "https://github.com/tscircuit/minicssgrid",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/minicssgrid"
       },
@@ -462,6 +538,8 @@
       "sha": "70df51aa5e939b0340a0f5aab16ff9548b1364a8",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/miniflex",
+      "cloneUrl": "https://github.com/tscircuit/miniflex",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/miniflex"
       },
@@ -472,6 +550,8 @@
       "sha": "0b381c1388d4763102bf765f6615f7539d8625ec",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/ngspice-spice-engine",
+      "cloneUrl": "https://github.com/tscircuit/ngspice-spice-engine",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/ngspice-spice-engine"
       },
@@ -482,6 +562,8 @@
       "sha": "915c64a7b3af43798d3b48fc357f93c57af06c1e",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/pcb-enclosure.git",
+      "cloneUrl": "https://github.com/addibble/pcb-enclosure.git",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/pcb-enclosure.git"
       },
@@ -492,6 +574,8 @@
       "sha": "599af1bd897cde16b4dd50e984ce24a57f0c03cc",
       "remote": "origin",
       "remoteUrl": "",
+      "cloneUrl": "",
+      "local": true,
       "remotes": {},
       "dirty": true
     },
@@ -500,6 +584,8 @@
       "sha": "8547c4352f443739847bfa878e8c064a1ed598bf",
       "remote": "origin",
       "remoteUrl": "",
+      "cloneUrl": "",
+      "local": true,
       "remotes": {},
       "dirty": true
     },
@@ -508,6 +594,8 @@
       "sha": "c55073249cb02db8ef87cac941726c634240f4af",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/poppygl",
+      "cloneUrl": "https://github.com/tscircuit/poppygl",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/poppygl"
       },
@@ -518,6 +606,8 @@
       "sha": "1c153ad0cfb5decf1a814e225c6f08b623a1eddf",
       "remote": "fork",
       "remoteUrl": "https://github.com/addibble/props.git",
+      "cloneUrl": "https://github.com/tscircuit/props",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/props.git",
         "origin": "https://github.com/tscircuit/props"
@@ -529,6 +619,8 @@
       "sha": "8a855af6955495e751792f80684dfc2eeea5bf40",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/rfc.git",
+      "cloneUrl": "https://github.com/tscircuit/rfc.git",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/rfc.git",
         "origin": "https://github.com/tscircuit/rfc.git"
@@ -540,6 +632,8 @@
       "sha": "6b07f5d51562fe389d2a727e3f6091c39eb7a181",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/runframe",
+      "cloneUrl": "https://github.com/tscircuit/runframe",
+      "local": false,
       "remotes": {
         "fork": "https://github.com/addibble/runframe.git",
         "origin": "https://github.com/tscircuit/runframe"
@@ -551,6 +645,8 @@
       "sha": "09af08ae97bf2edbc1d2f0d75fce67d2c4c977a0",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/schematic-symbols",
+      "cloneUrl": "https://github.com/tscircuit/schematic-symbols",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/schematic-symbols"
       },
@@ -561,6 +657,8 @@
       "sha": "0bb371b26f1dca711da5dc7995f7aff85ff75511",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/schematic-trace-solver",
+      "cloneUrl": "https://github.com/tscircuit/schematic-trace-solver",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/schematic-trace-solver"
       },
@@ -571,6 +669,8 @@
       "sha": "4fefcab5b7beb273c8b7e25a730cd68d14e1ac90",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/skill",
+      "cloneUrl": "https://github.com/tscircuit/skill",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/skill"
       },
@@ -581,6 +681,8 @@
       "sha": "91da732bd3e7a716c067779380a6266a3a6fd634",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/solver-utils",
+      "cloneUrl": "https://github.com/tscircuit/solver-utils",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/solver-utils"
       },
@@ -591,6 +693,8 @@
       "sha": "d56b61fb26d839a56203c8585e8db6e58e1636ba",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/spicets",
+      "cloneUrl": "https://github.com/tscircuit/spicets",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/spicets"
       },
@@ -601,6 +705,8 @@
       "sha": "5c9e7419006893583105ccf1b5648749012f8368",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/spicey",
+      "cloneUrl": "https://github.com/tscircuit/spicey",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/spicey"
       },
@@ -611,6 +717,8 @@
       "sha": "f61632228b4741c45227940c285ad6aca3c765cd",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/stack-svgs",
+      "cloneUrl": "https://github.com/tscircuit/stack-svgs",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/stack-svgs"
       },
@@ -621,6 +729,8 @@
       "sha": "234fc03a202f3dbbb1390f216e140e6cb993536d",
       "remote": "origin",
       "remoteUrl": "https://github.com/tscircuit/tscircuit",
+      "cloneUrl": "https://github.com/tscircuit/tscircuit",
+      "local": false,
       "remotes": {
         "origin": "https://github.com/tscircuit/tscircuit"
       },

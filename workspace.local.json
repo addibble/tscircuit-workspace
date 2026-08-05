@@ -3,20 +3,28 @@
   "defaultForkEffort": "parametric-enclosures",
   "forkEfforts": {
     "parametric-enclosures": {
-      "description": "Repos carrying the parametric-enclosure patch set, in release order (see create-fdm-enclosure/README.md). Downstream rebuild-only repos (eval, runframe, cli) are excluded — they carry no patch branch. Override the effort with SYNC_FORK_EFFORT, or one branch for every repo with SYNC_FORK_BRANCH.",
+      "description": "Repos carrying the parametric-enclosure patch set, in release order (dependencies first, docs last). Downstream rebuild-only repos (eval, runframe) are excluded - they carry no patch branch. Override the effort with SYNC_FORK_EFFORT, or one branch for every repo with SYNC_FORK_BRANCH.",
       "defaultBranch": "feat/parametric-enclosures",
       "branchOverrides": {
-        "infer-cable-insertion-point": "fix/explicit-insertion-direction"
+        "infer-cable-insertion-point": "fix/release-version-sync",
+        "checks": "feat/insertion-direction-canonical-axes",
+        "cli": "rfc/parametric-enclosures",
+        "jscad-electronics": "fix/connected-right-angle-pinrow",
+        "skill": "feat/enclosure-elements"
       },
       "repos": [
         "circuit-json",
         "props",
+        "checks",
         "create-fdm-enclosure",
         "circuit-json-to-gltf",
         "infer-cable-insertion-point",
+        "jscad-electronics",
         "3d-viewer",
         "core",
-        "rfc"
+        "cli",
+        "rfc",
+        "skill"
       ]
     }
   }
