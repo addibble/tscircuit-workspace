@@ -109,6 +109,12 @@
 #   ./tsc-dev fork <repo...>          Create your fork of each repo and wire it up as the `fork`
 #                                     remote, keeping origin pointed at tscircuit. --org <org> forks
 #                                     into an organization. No-op if you already have push access.
+#   ./tsc-dev helpers <query>         Does this helper already exist? Searches exported symbols across
+#                                     every cloned repo before you write another one.
+#                                       helpers bounds          find existing bounds helpers
+#                                       helpers --dupes         names exported by several packages
+#                                       helpers --added <repo>  new exports on a branch that shadow
+#                                                               something that already exists
 #   ./tsc-dev gen-map [--check]       Regenerate MAP.md's group sections from workspace.json (or
 #                                     verify they are in sync, for CI / pre-commit)
 #   ./tsc-dev test [path...]          Run the workspace's own tests (bun test ./test/)
@@ -1574,6 +1580,19 @@ env_adopt() {
   echo "    cd $target && ./tsc-dev install && ./tsc-dev env diff $owner"
 }
 
+# Does this helper already exist? (see bin/find-helpers.mjs)
+cmd_helpers() {
+  [ $# -ge 1 ] || die "usage: helpers <query> | helpers --dupes | helpers --added <repo> [base-ref]"
+  case "$1" in
+    --added)
+      local repo="${2:?usage: helpers --added <repo> [base-ref]}" base="${3:-}"
+      have "$repo" || die "repo '$repo' is not cloned"
+      [ -n "$base" ] || base="$(origin_head "$repo")"
+      node "$ROOT/bin/find-helpers.mjs" "$ROOT" --added "$ROOT/$repo" "$base" ;;
+    *) node "$ROOT/bin/find-helpers.mjs" "$ROOT" "$@" ;;
+  esac
+}
+
 cmd_gen_map() {
   local mode="write"
   [ "${1:-}" = "--check" ] && mode="check"
@@ -1788,6 +1807,7 @@ main() {
     env)      cmd_env "$@" ;;
     playground) cmd_playground "$@" ;;
     gen-map)  cmd_gen_map "$@" ;;
+    helpers)  cmd_helpers "$@" ;;
     test)     cmd_test "$@" ;;
     pr-list)  cmd_pr_list "$@" ;;
     pr-rm)    cmd_pr_rm "$@" ;;

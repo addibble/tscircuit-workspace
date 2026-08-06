@@ -398,6 +398,74 @@ ln -sfn ~/src/tscircuit/skill .claude/skills/tscircuit
 
 `~/src/tsc-playground` is set up this way.
 
+## Before writing a helper, check whether it already exists
+
+The most common avoidable defect here is a small utility written from scratch
+that already exists in the project. The copy is usually *subtly* wrong, and
+wrong **silently**, because the author tests the one case they had in mind.
+
+A live example: a hand-rolled `toMm` that does `Number.parseFloat(value)` is
+right for `"2mm"` and for bare numbers, and wrong for everything else — measured
+against `circuit-json`'s `length`:
+
+| input | `length` (correct) | `parseFloat` |
+|---|---|---|
+| `"1cm"` | 10 | 1 |
+| `"0.5in"` | 12.7 | 0.5 |
+| `"1000um"` | 1 | 1000 |
+| `"0.002m"` | 2 | 0.002 |
+
+Nothing throws; a board just comes out ten times too small.
+
+### The check
+
+```bash
+./tsc-dev helpers <name>          # exported symbols matching a name, across every cloned repo
+./tsc-dev helpers --dupes         # names already exported by several packages
+./tsc-dev helpers --added <repo>  # new exports on a branch that shadow an existing helper
+```
+
+Before adding a utility: search for it, and search the obvious synonyms
+(`bounds`/`bbox`/`extent`, `toMm`/`parse`/`length`). If you find one:
+
+1. **Read it before reusing it** — check the units, the argument order, and the
+   edge cases you care about. `helpers rotatePoint` returns four
+   implementations with four conventions: radians vs degrees, with and without
+   an origin, 2D vs 3D. Picking the wrong one compiles perfectly.
+2. **Reuse it if it fits.** Import from the package that owns it.
+3. **If it is wrong, fix it there** rather than writing a correct twin beside
+   it. Two helpers with the same name and different behaviour is worse than one
+   with a bug, because the next reader cannot tell which is authoritative.
+4. **If you genuinely need different behaviour**, say so in a comment naming the
+   existing one and why it does not fit — otherwise it reads as an oversight and
+   gets "consolidated" later by someone who does not know.
+
+### Where these things already live
+
+| Need | Use | Do not hand-roll |
+|---|---|---|
+| parse a distance/length (`"1cm"`, `"0.5in"`) | `length` / `distance` from `circuit-json` (`src/units`), which wraps `parseAndConvertSiUnit` from **`format-si-unit`** | `parseFloat`, regex on the unit suffix |
+| any other SI quantity (resistance, capacitance, voltage, frequency, current) | the matching zod parser in `circuit-json/src/units` | ad-hoc suffix stripping |
+| bounds of circuit elements | **`@tscircuit/circuit-json-util`**: `getBoundsOfPcbElements`, `getBoardBounds`, `getSchematicElementBounds` | scanning elements for min/max |
+| bounds maths (from points, centre, overlap, contains) | **`@tscircuit/math-utils`**: `getBoundsFromPoints`, `getBoundsCenter`, `doBoundsOverlap`, `isPointInsideBounds`, `clamp`, `range` | a fresh min/max loop |
+| 2D transforms (rotate, translate, compose) | **`transformation-matrix`** — `compose()`, `applyToPoint()` | `x*cos - y*sin` by hand |
+| 3D geometry / solids | **`@jscad/modeling`** via `jscad-planner` / `jscad-fiber`; `three` in `3d-viewer`; `circuit-json-to-gltf` for glTF output | bespoke matrix code |
+| an iterative solver with a debugger | **`@tscircuit/solver-utils`**: `BaseSolver`, `GenericSolverDebugger` | another solver base class |
+| visual debug output | **`graphics-debug`** | ad-hoc SVG dumps |
+| footprint geometry | **`footprinter`** | hardcoded pad coordinates |
+
+`./tsc-dev helpers --dupes` currently reports 135 names exported by more than
+one package — that is the existing debt, not a target to add to.
+
+### Mechanical checks
+
+- `./tsc-dev helpers --added <repo>` before opening a PR; it is advisory, and a
+  hit is a prompt to justify or reuse, not an automatic failure.
+- Prefer importing a package over copying a file between repos: a copy silently
+  stops receiving fixes.
+- If a helper belongs in more than one repo, it belongs in `math-utils` or
+  `circuit-json-util`, and the other repos should depend on it.
+
 ## Coordinate frames and side names — where the rules live
 
 This workspace has spent more time on side-naming and transform defects than on

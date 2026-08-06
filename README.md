@@ -80,6 +80,7 @@ commands. Common ones:
 | `./tsc-dev config [key]` | effective merged config + which layer each key came from |
 | `./tsc-dev freeze` | snapshot this build environment into your layer |
 | `./tsc-dev env <add\|show\|diff\|adopt>` | read and reproduce a peer's build environment |
+| `./tsc-dev helpers <query>` | does this helper already exist? (`--dupes`, `--added <repo>`) |
 | `./tsc-dev gen-map [--check]` | regenerate (or verify) MAP.md's group sections from `workspace.json` |
 | `./tsc-dev test` | run the workspace's own test suite |
 
@@ -349,7 +350,30 @@ the repo has test files, because several repos invoke it from a matrix-sharded
 multi-line step that no line-level parse can reconstruct — and the correct local
 equivalent is simply the whole suite.
 
-### Working on the tooling
+### Don't write a helper that already exists
+
+The most common avoidable defect in this codebase is a small utility written
+from scratch that already exists — and the copy is usually subtly wrong, in a
+way nothing throws on. A hand-rolled `toMm` doing `Number.parseFloat` handles
+`"2mm"` correctly and turns `"1cm"` into 1 instead of 10.
+
+```bash
+./tsc-dev helpers bounds          # exported symbols matching a name, across every cloned repo
+./tsc-dev helpers --dupes         # names already exported by several packages (currently 135)
+./tsc-dev helpers --added core    # new exports on a branch that shadow an existing helper
+```
+
+The canonical homes are listed in `AGENTS.md` — `format-si-unit` (via
+`circuit-json`'s `length`/`distance`) for units, `@tscircuit/math-utils` and
+`@tscircuit/circuit-json-util` for bounds, `transformation-matrix` for 2D
+transforms, `@jscad/modeling` for solids, `@tscircuit/solver-utils` for solvers.
+
+Finding an existing helper is the start, not the end: read it before reusing it.
+`helpers rotatePoint` returns four implementations with four different
+conventions (radians vs degrees, with and without an origin, 2D vs 3D), and
+picking the wrong one compiles perfectly.
+
+## Working on the tooling
 
 ```bash
 ./tsc-dev test              # bun test ./test/
