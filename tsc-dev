@@ -543,12 +543,52 @@ fs.writeFileSync(file,JSON.stringify(c,null,2)+"\n");
   echo "  ./tsc-dev playground start $name"
 }
 
+# The port the web viewer should always come back on. One port per playground,
+# so a browser tab stays valid across restarts; overridable per playground in
+# the config for people running two at once.
+playground_port() {
+  local name="$1" port
+  port="$(ws "w.playgrounds?.[args[0]]?.port ?? ''" "$name")"
+  [ -n "$port" ] && { echo "$port"; return 0; }
+  echo 3020
+}
+
+# Make sure the port is actually free, and say precisely who has it if not.
+# A dev server we started is ours to reap; anything else is not, and silently
+# drifting to the next port is what makes a tab stop matching the daemon.
+playground_free_port() {
+  local port="$1" pids pid cmd
+  pids="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
+  [ -n "$pids" ] || return 0
+  for pid in $pids; do
+    cmd="$(ps -o command= -p "$pid" 2>/dev/null)"
+    case "$cmd" in
+      *"$ROOT/cli/cli/main.ts dev"*|*tsc-dev*dev*)
+        echo "  ▪ reaping our previous dev server on $port (pid $pid)"
+        kill "$pid" 2>/dev/null || true ;;
+      *)
+        echo "  ✗ port $port is held by something else (pid $pid): ${cmd:0:60}"
+        echo "    free it, or set a port for this playground in .local/workspace.local.json"
+        return 1 ;;
+    esac
+  done
+  # Sockets linger briefly after the process goes.
+  local waited=0
+  while [ "$waited" -lt 20 ]; do
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1 || return 0
+    sleep 0.25; waited=$((waited + 1))
+  done
+  echo "  ⚠ port $port still busy after 5s — the viewer may pick another one"
+  return 0
+}
+
 playground_start() {
-  local name="" dev_flag=""
+  local name="" dev_flag="" sync_flag=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --dev) dev_flag=1; shift ;;
       --no-dev) dev_flag=0; shift ;;
+      --no-sync) sync_flag=0; shift ;;
       -*) die "unknown argument '$1'" ;;
       *) [ -z "$name" ] && name="$1" || die "unexpected argument '$1'"; shift ;;
     esac
@@ -577,7 +617,21 @@ playground_start() {
     if [ ! -f "$ROOT/runframe/dist/standalone.min.js" ]; then
       echo "  ⚠ no local runframe bundle — the web viewer needs: ./tsc-dev rebuild --from eval --to runframe"
     else
-      start_daemon "dev-$name" "$ROOT/tsc-dev" dev "$dir" --local
+      # Pin the port. The cli falls back to the next free one when its own
+      # previous listener has not released the socket (a `bun --hot` reload
+      # leaks it), so an unpinned dev server drifts 3020 -> 3021 -> ... and the
+      # tab you have open quietly stops being the one being rebuilt. Reap our
+      # own stale listener first; refuse to steal a port from anything else.
+      local port; port="$(playground_port "$name")"
+      playground_free_port "$port" || return 1
+      start_daemon "dev-$name" "$ROOT/tsc-dev" dev "$dir" --local --port "$port"
+      echo "    → http://localhost:$port"
+    fi
+    # Watchers build one repo each; nothing rebuilds the bundles that INLINE
+    # those repos, and the browser only ever runs the inlined copy. This closes
+    # that loop from the bundling graph rather than from memory.
+    if [ "$sync_flag" != 0 ]; then
+      start_daemon "chain-$name" node "$ROOT/bin/chain-sync.mjs" "$ROOT" "$ROOT/tsc-dev"
     fi
   fi
   echo "  ./tsc-dev playground status $name"
@@ -629,7 +683,46 @@ playground_status() {
   fi
   [ -n "$missing" ] && echo "  ⚠ no watcher for:$missing  — ./tsc-dev playground start $name"
   [ -n "$orphan" ] && echo "  ⚠ watching repos no longer in the set:$orphan  — ./tsc-dev playground restart $name"
+  playground_report_stale "$name"
   return 0
+}
+
+# A watcher builds and pushes ONE repo. That is enough for anything resolved
+# from node_modules at runtime, and silently not enough for anything that
+# inlines it at build time: the browser preview runs core inside eval's
+# prebuilt worker, embedded in runframe's standalone. So the thing you are
+# looking at can be hours behind the thing you just edited, with nothing
+# logged and nothing failing.
+#
+# The bundling graph already knows who bakes in whom, so this is a graph query,
+# not a fact to remember. `bin/stale-bundles.mjs` walks it against build
+# timestamps; here we only decide what to say about the answer.
+playground_report_stale() {
+  local name="$1" line stale=""
+  while IFS= read -r line; do
+    [ -n "$line" ] && stale="$stale$line"$'\n'
+  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" 2>/dev/null)
+  [ -n "$stale" ] || return 0
+  echo "  ⚠ stale bundles — what runs in the browser is NOT what the source says:"
+  printf '%s' "$stale" | sed 's/^/      /'
+  echo "      fix: ./tsc-dev playground sync $name"
+}
+
+# Rebuild whatever the bundling graph says is behind, in dependency order.
+# This is the automated form of the rule the watchers cannot enforce alone:
+# a watcher owns one repo, and re-inlining is a property of the graph.
+playground_sync() {
+  local name="${1:-$(default_playground)}"
+  local stale=() repo
+  while IFS= read -r repo; do
+    [ -n "$repo" ] && stale+=("$repo")
+  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" 2>&1 >/dev/null)
+  if [ ${#stale[@]} -eq 0 ]; then
+    echo "✓ nothing stale — every bundle already contains what it inlines"
+    return 0
+  fi
+  echo "▶ rebuilding stale bundles in dependency order: ${stale[*]}"
+  cmd_rebuild "${stale[@]}"
 }
 
 playground_stop() {
@@ -656,9 +749,10 @@ cmd_playground() {
     stop)    playground_stop ;;
     restart) playground_stop; playground_start "$@" ;;
     status)  playground_status "$@" ;;
+    sync)    playground_sync "$@" ;;
     logs)    playground_logs "$@" ;;
     list)    playground_names | sed 's/^/  /' ;;
-    *) die "usage: playground <init|start|stop|restart|status|logs|list>" ;;
+    *) die "usage: playground <init|start|stop|restart|status|sync|logs|list>" ;;
   esac
 }
 
@@ -1235,17 +1329,18 @@ cmd_fork() {
 #     is a human decision, made by clicking "Ready for review".
 # `--url-only` creates nothing at all: it pushes and prints the compare URL.
 cmd_pr_push() {
-  local repo="${1:?usage: pr-push <repo> <branch> [--url-only] [gh args...]}"
-  local branch="${2:?usage: pr-push <repo> <branch> [--url-only] [gh args...]}"
+  local repo="${1:?usage: pr-push <repo> <branch> [--url-only] [--allow-dupes] [gh args...]}"
+  local branch="${2:?usage: pr-push <repo> <branch> [--url-only] [--allow-dupes] [gh args...]}"
   shift 2
   # Everything else is forwarded to `gh pr create` (--title/--body, --reviewer,
   # ...). Without a title/body source gh refuses to run outside a tty, so
   # default to --fill: the worktree carries the fix as one commit, and its
   # message is the PR description we want.
-  local gh_args=() a has_body=0 url_only=0
+  local gh_args=() a has_body=0 url_only=0 allow_dupes=0
   for a in "$@"; do
     case "$a" in
       --url-only|--no-create) url_only=1; continue ;;
+      --allow-dupes) allow_dupes=1; continue ;;
       --draft) continue ;;   # accepted and ignored: draft is the only mode
       --ready|--ready-for-review|--no-draft)
         die "refusing: taking a PR out of draft is a manual click ('Ready for review')" ;;
@@ -1266,6 +1361,17 @@ cmd_pr_push() {
   local base; base="$(origin_head "$repo")"; base="${base#origin/}"
   [ -n "$(git -C "$dir" log --oneline "origin/$base..HEAD" 2>/dev/null)" ] \
     || die "nothing to propose: $branch has no commits beyond origin/$base"
+
+  # Gate on the one check GitHub will never run for us. The repo's own CI gates
+  # deliberately are NOT run here: GitHub runs those on the PR anyway, and they
+  # take minutes. This takes seconds and is the only thing that would otherwise
+  # go unchecked.
+  if [ "$allow_dupes" = 0 ]; then
+    if ! node "$ROOT/bin/find-helpers.mjs" "$ROOT" --added "$dir" "origin/$base"; then
+      echo
+      die "refusing to push: see above. Re-run with --allow-dupes once justified in a comment."
+    fi
+  fi
   echo "▶ push $branch -> $remote"
   git -C "$dir" push -u "$remote" "$branch"
   local head="$branch" owner=""

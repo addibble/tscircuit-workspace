@@ -429,17 +429,33 @@ Nothing throws; a board just comes out ten times too small.
 ./tsc-dev helpers --added <repo>  # new exports on a branch that shadow an existing helper
 ```
 
-**`pr-check` gates on this.** A branch that exports a name which already exists
-elsewhere fails, alongside the repo's own CI gates. Test, fixture and example
-paths are excluded, because a part definition copied into a test is legitimate.
-The gate matches on *name*, so a cross-domain collision (`getBounds(GraphicsObject)`
-vs `getBounds(number[])`) trips it too — that is intended: shadowing a name you
-already import deserves a decision, even when the implementations differ.
+**`pr-check` gates on this**, and so does `pr-push` — a branch that exports a
+name which already exists elsewhere fails, and `pr-push` refuses to push before
+it has sent anything. Test, fixture and example paths are excluded, because a
+part definition copied into a test is legitimate. The gate matches on *name*, so
+a cross-domain collision (`getBounds(GraphicsObject)` vs `getBounds(number[])`)
+trips it too — that is intended: shadowing a name you already import deserves a
+decision, even when the implementations differ.
 
 When it fires, in order of preference: reuse the existing helper; fix the
 existing helper where it lives; rename yours so it does not shadow; or, if it
-genuinely must differ, say why in a comment and re-run with
-`./tsc-dev pr-check <repo> <branch> --allow-dupes`.
+genuinely must differ, say why in a comment and re-run with `--allow-dupes`.
+
+### Where each check is enforced
+
+| Check | Runs where | Blocks a GitHub merge? |
+|---|---|---|
+| the repo's own CI gates (`bun test`, `tsc --noEmit`, `lint:zod`, …) | GitHub Actions, **and** locally via `pr-check` | yes |
+| duplicate helpers | **local tooling only** — `pr-check` and `pr-push` | **no** |
+
+The duplicate-helper gate is not a GitHub check and cannot become one without
+changes to each repo: the index it compares against is built from the sibling
+checkouts in this workspace, which CI does not have. It binds anyone using
+`./tsc-dev pr-push` — which refuses to push when it fires — and nobody else.
+Treat it as a guard on our own work, not as protection for the project.
+
+`pr-push` deliberately runs *only* this check, not the full CI set: GitHub runs
+the rest on the PR anyway, and this one takes seconds while they take minutes.
 
 Before adding a utility: search for it, and search the obvious synonyms
 (`bounds`/`bbox`/`extent`, `toMm`/`parse`/`length`). If you find one:

@@ -1,0 +1,132 @@
+#!/usr/bin/env node
+//
+// chain-sync.mjs — keep the inlining consumers current with what the watchers build.
+//
+// A watcher owns one repo: it builds it and pushes it. That is everything a
+// runtime consumer needs, and nothing a bundling consumer needs. The browser
+// preview runs core inside eval's prebuilt worker, base64-embedded into
+// runframe's standalone, so until eval and runframe are rebuilt the page keeps
+// running the copy inlined at their last build -- silently, with no error and
+// no log line, which is how a solver fix took six hours to reach a browser
+// while `tsci build` had it immediately.
+//
+// Whose problem that is matters: no watcher can fix it, because re-inlining is
+// a property of the GRAPH, not of the repo that changed. This daemon owns the
+// graph edge. It is the automated form of what AGENTS.md used to ask a human to
+// remember.
+//
+//   usage: chain-sync.mjs <workspace-root> <tsc-dev> [--interval ms] [--quiet-for ms]
+//
+// Rebuilding the chain costs minutes (runframe is two vite bundles), so it is
+// deliberately NOT triggered per save: it waits for the watchers to go quiet,
+// then catches everything up in one pass. A burst of edits therefore costs one
+// chain rebuild, not one per file.
+import { execFileSync, spawnSync } from "node:child_process"
+import fs from "node:fs"
+import path from "node:path"
+import { isMain } from "./is-main.mjs"
+import { findStaleBundles, describeStale } from "./stale-bundles.mjs"
+import { loadConfig } from "./workspace-config.mjs"
+
+const now = () => Date.now()
+const log = (msg) =>
+  console.log(`[${new Date().toTimeString().slice(0, 8)}] ${msg}`)
+
+/**
+ * Newest build artifact under <repo>/dist, or null. Shallow on purpose: deep
+ * trees (runframe ships assets) cost more to walk than the answer is worth.
+ */
+export const distBuiltAt = (root, repo, depth = 2) => {
+  let newest = null
+  const walk = (dir, level) => {
+    if (level > depth) return
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full, level + 1)
+        continue
+      }
+      try {
+        const { mtimeMs } = fs.statSync(full)
+        if (newest == null || mtimeMs > newest) newest = mtimeMs
+      } catch {}
+    }
+  }
+  walk(path.join(root, repo, "dist"), 0)
+  return newest
+}
+
+/**
+ * The decision, isolated from the clock and the filesystem so it can be stated
+ * as a rule: rebuild when something is stale AND the watchers have settled.
+ * Rebuilding mid-burst would be thrown away by the next save.
+ */
+export const shouldSync = ({ stale, newestBuildAt, at, quietForMs }) => {
+  if (stale.length === 0) return { sync: false, reason: "nothing stale" }
+  if (newestBuildAt == null) return { sync: true, reason: "no recent build" }
+  const idleMs = at - newestBuildAt
+  if (idleMs < quietForMs) {
+    return { sync: false, reason: `watchers busy (${Math.round(idleMs / 1000)}s idle)` }
+  }
+  return { sync: true, reason: `idle ${Math.round(idleMs / 1000)}s` }
+}
+
+if (isMain(import.meta.url)) {
+  const [root, tscDev, ...rest] = process.argv.slice(2)
+  const arg = (flag, fallback) => {
+    const i = rest.indexOf(flag)
+    return i === -1 ? fallback : Number(rest[i + 1])
+  }
+  const intervalMs = arg("--interval", 20_000)
+  const quietForMs = arg("--quiet-for", 45_000)
+
+  const inlines = loadConfig(root)?.bundling?.inlines ?? {}
+  log(
+    `watching the bundling graph (${Object.keys(inlines).length} consumers), ` +
+      `sync after ${quietForMs / 1000}s of quiet`,
+  )
+
+  let lastFailureAt = 0
+  for (;;) {
+    const builtAt = (repo) => distBuiltAt(root, repo)
+    const stale = findStaleBundles({ inlines, builtAt })
+    const everyRepo = new Set(Object.keys(inlines).concat(...Object.values(inlines)))
+    const newestBuildAt = [...everyRepo]
+      .map(builtAt)
+      .filter((t) => t != null)
+      .reduce((a, b) => (a == null || b > a ? b : a), null)
+
+    const { sync, reason } = shouldSync({
+      stale,
+      newestBuildAt,
+      at: now(),
+      quietForMs,
+    })
+
+    // A failing build should not spin: back off for a minute before retrying,
+    // so the log stays readable and the machine stays usable.
+    if (sync && now() - lastFailureAt > 60_000) {
+      for (const line of describeStale(stale)) log(`stale: ${line}`)
+      const order = stale.map((s) => s.repo)
+      log(`▶ rebuild ${order.join(" ")}  (${reason})`)
+      const result = spawnSync(tscDev, ["rebuild", ...order], {
+        cwd: root,
+        stdio: "inherit",
+      })
+      if (result.status === 0) {
+        log(`✓ chain current: ${order.join(" ")}`)
+      } else {
+        lastFailureAt = now()
+        log(`✗ rebuild failed (exit ${result.status}) — backing off 60s`)
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+}
