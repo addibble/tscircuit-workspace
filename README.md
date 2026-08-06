@@ -407,9 +407,19 @@ remote the same way: `fork` if the remote exists, otherwise `origin` if GitHub
 reports push access, otherwise it stops and tells you to run `./tsc-dev fork`.
 
 ```bash
-./tsc-dev pr-push core fix/pad-transform          # push + gh pr create
-./tsc-dev pr-push core fix/pad-transform --draft
+./tsc-dev pr-push core fix/pad-transform              # push + open a DRAFT pr
+./tsc-dev pr-push core fix/pad-transform --url-only   # push only, print the compare URL
 ```
+
+**Every PR this tool opens is a draft, and nothing here ever takes one out of
+draft.** There is no flag for a ready-for-review PR; `--ready`, `--no-draft` and
+friends are refused rather than silently ignored. Moving a PR out of draft is a
+human decision — click "Ready for review" when you mean it. `--url-only` goes
+further and creates nothing, printing the compare URL for you to click.
+
+Re-running `pr-push` after a PR exists reports the existing one instead of
+failing, and `--fill` takes the title and body from the branch's commit, so it
+never stops to prompt when run unattended.
 
 When pushing to a fork, the PR head is qualified as `<owner>:<branch>` — that
 qualification is what makes a cross-repo PR work for a contributor without write

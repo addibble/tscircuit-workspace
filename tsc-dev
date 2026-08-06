@@ -57,7 +57,10 @@
 #                                     repo-specific gates (lint:zod, format:check, smoke-test:dist)
 #                                     can't drift out of a hand-maintained list.
 #   ./tsc-dev pr-push <repo> <br>     Push the worktree's branch to your fork (or to origin if you
-#                                     have write access) and open the PR against tscircuit/<repo>.
+#                                     have write access) and open a DRAFT pull request against
+#                                     tscircuit/<repo>. Always a draft, and never marked ready —
+#                                     that is a manual click. --url-only pushes and prints the
+#                                     compare URL without creating anything.
 #   ./tsc-dev local <sub>             Manage YOUR config layer — a worktree in .local/ on an orphan
 #                                     branch (user/<login>) that is pushed only to your fork:
 #                                       init [--remote <url>]  create it (migrating user-specific keys
@@ -1034,7 +1037,7 @@ cmd_pr() {
   echo "✓ isolated worktree ready: $dir"
   echo "    cd $dir"
   echo "    ./tsc-dev pr-check $repo $branch      # run exactly the gates CI runs on a PR"
-  echo "    ./tsc-dev pr-push  $repo $branch      # push to your fork (or origin) + open the PR"
+  echo "    ./tsc-dev pr-push  $repo $branch      # push + open a DRAFT pr (you click 'Ready for review')"
   [ "$failed_pick" = 1 ] && return 1
   return 0
 }
@@ -1188,13 +1191,36 @@ cmd_fork() {
   done
 }
 
-# Push a PR worktree's branch to your fork (or origin) and open the PR. The head
-# ref is qualified with the fork owner, which is what makes a cross-repo PR work
-# for a contributor without write access.
+# Push a PR worktree's branch to your fork (or origin) and open a DRAFT pull
+# request. The head ref is qualified with the fork owner, which is what makes a
+# cross-repo PR work for a contributor without write access.
+#
+# Two rules here are deliberately not configurable:
+#   * every PR this tool opens is a DRAFT — there is no flag for anything else;
+#   * nothing here ever takes a PR out of draft. Marking a PR ready for review
+#     is a human decision, made by clicking "Ready for review".
+# `--url-only` creates nothing at all: it pushes and prints the compare URL.
 cmd_pr_push() {
-  local repo="${1:?usage: pr-push <repo> <branch> [--draft]}"
-  local branch="${2:?usage: pr-push <repo> <branch> [--draft]}"
-  local draft=""; [ "${3:-}" = "--draft" ] && draft="--draft"
+  local repo="${1:?usage: pr-push <repo> <branch> [--url-only] [gh args...]}"
+  local branch="${2:?usage: pr-push <repo> <branch> [--url-only] [gh args...]}"
+  shift 2
+  # Everything else is forwarded to `gh pr create` (--title/--body, --reviewer,
+  # ...). Without a title/body source gh refuses to run outside a tty, so
+  # default to --fill: the worktree carries the fix as one commit, and its
+  # message is the PR description we want.
+  local gh_args=() a has_body=0 url_only=0
+  for a in "$@"; do
+    case "$a" in
+      --url-only|--no-create) url_only=1; continue ;;
+      --draft) continue ;;   # accepted and ignored: draft is the only mode
+      --ready|--ready-for-review|--no-draft)
+        die "refusing: taking a PR out of draft is a manual click ('Ready for review')" ;;
+      --title|-t|--body|-b|--body-file|-F|--fill|--fill-first|--fill-verbose|--web|-w|--editor|-e) has_body=1 ;;
+    esac
+    gh_args+=("$a")
+  done
+  [ "$has_body" = 0 ] && gh_args+=(--fill)
+  gh_args+=(--draft)
   have "$repo" || die "repo '$repo' is not cloned"
   local dir; dir="$(wt_dir "$repo" "$branch")"
   [ -d "$dir" ] || die "no worktree at $dir  (create it: ./tsc-dev pr $repo $branch)"
@@ -1203,17 +1229,39 @@ cmd_pr_push() {
   fi
   local remote; remote="$(push_remote_for "$repo")" \
     || die "no fork remote and no push access to tscircuit/$repo — run: ./tsc-dev fork $repo"
+  local base; base="$(origin_head "$repo")"; base="${base#origin/}"
+  [ -n "$(git -C "$dir" log --oneline "origin/$base..HEAD" 2>/dev/null)" ] \
+    || die "nothing to propose: $branch has no commits beyond origin/$base"
   echo "▶ push $branch -> $remote"
   git -C "$dir" push -u "$remote" "$branch"
-  local head="$branch"
+  local head="$branch" owner=""
   if [ "$remote" = "fork" ]; then
-    local url owner
+    local url
     url="$(git -C "$ROOT/$repo" remote get-url fork)"
     owner="$(printf '%s' "$url" | sed -E 's#.*github\.com[:/]([^/]+)/.*#\1#')"
     head="$owner:$branch"
   fi
-  echo "▶ gh pr create -R tscircuit/$repo --head $head"
-  (cd "$dir" && gh pr create -R "tscircuit/$repo" --head "$head" ${draft:+$draft})
+  # Already proposed? Report it rather than letting gh fail.
+  local existing
+  existing="$(gh pr list -R "tscircuit/$repo" --head "$branch" --state open --json url,isDraft \
+    --jq '.[0] | select(.url) | .url + (if .isDraft then "  (draft)" else "  (READY — already opened)" end)' 2>/dev/null || true)"
+  if [ -n "$existing" ]; then
+    echo "✓ a pull request already exists: $existing"
+    return 0
+  fi
+  local compare="https://github.com/tscircuit/$repo/compare/$base...${owner:+$owner:}$branch?expand=1"
+  if [ "$url_only" = 1 ]; then
+    echo "✓ pushed — nothing created. Open it yourself:"
+    echo "    $compare"
+    return 0
+  fi
+  echo "▶ gh pr create -R tscircuit/$repo --head $head ${gh_args[*]}"
+  if ! (cd "$dir" && gh pr create -R "tscircuit/$repo" --head "$head" --base "$base" "${gh_args[@]}"); then
+    echo "  ✗ gh pr create failed — open it by hand:"
+    echo "    $compare"
+    return 1
+  fi
+  echo "✓ opened as a DRAFT — it stays one until you click 'Ready for review'."
 }
 
 # ---------------------------------------------------------------------------

@@ -200,9 +200,13 @@ environment. Give it its own worktree off upstream `main`:
 ./tsc-dev pr <repo> <branch> --pick <sha>       # a fix already committed on the feature branch
 ./tsc-dev pr <repo> <branch> --take <path>      # a fix that only exists in the working tree
 ./tsc-dev pr-check <repo> <branch>              # exactly the gates CI runs on a PR
-./tsc-dev pr-push <repo> <branch>               # push to your fork (or origin) + open the PR
+./tsc-dev pr-push <repo> <branch>               # push + open a DRAFT pr
 ./tsc-dev pr-rm <repo> <branch> --delete-branch
 ```
+
+**PRs are always opened as drafts, and never marked ready for review.** That is
+a human click, not an agent action — `--ready`/`--no-draft` are refused. Use
+`--url-only` to push and print the compare URL without creating anything.
 
 Remote convention, identical for every developer: **`origin` is always
 `tscircuit/<repo>`** (upstream) and **`fork` is your own** — set up with
