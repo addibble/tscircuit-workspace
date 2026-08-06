@@ -8,30 +8,33 @@
 // and `args` holds the extra arguments. Arrays print one element per line so bash
 // can read them with `while read`; objects print as JSON.
 import { loadConfig } from "./workspace-config.mjs"
+import { isMain } from "./is-main.mjs"
 
-const [root, expression, ...args] = process.argv.slice(2)
-if (!root || !expression) {
-  console.error("usage: ws.mjs <root> <expression> [args...]")
-  process.exit(2)
+if (isMain(import.meta.url)) {
+  const [root, expression, ...args] = process.argv.slice(2)
+  if (!root || !expression) {
+    console.error("usage: ws.mjs <root> <expression> [args...]")
+    process.exit(2)
+  }
+
+  let w
+  try {
+    w = loadConfig(root)
+  } catch (e) {
+    console.error(String(e.message ?? e))
+    process.exit(3)
+  }
+
+  let out
+  try {
+    out = eval(expression)
+  } catch (e) {
+    console.error(String(e.message ?? e))
+    process.exit(3)
+  }
+
+  if (out == null) process.exit(0)
+  if (Array.isArray(out)) process.stdout.write(out.join("\n"))
+  else if (typeof out === "object") process.stdout.write(JSON.stringify(out, null, 2))
+  else process.stdout.write(String(out))
 }
-
-let w
-try {
-  w = loadConfig(root)
-} catch (e) {
-  console.error(String(e.message ?? e))
-  process.exit(3)
-}
-
-let out
-try {
-  out = eval(expression)
-} catch (e) {
-  console.error(String(e.message ?? e))
-  process.exit(3)
-}
-
-if (out == null) process.exit(0)
-if (Array.isArray(out)) process.stdout.write(out.join("\n"))
-else if (typeof out === "object") process.stdout.write(JSON.stringify(out, null, 2))
-else process.stdout.write(String(out))

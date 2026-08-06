@@ -17,6 +17,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { isMain } from "./is-main.mjs"
 
 const SKIP_DIRS = new Set(["node_modules", "dist", ".git", ".yalc", ".worktrees", ".local", ".run", "cosmos-export"])
 
@@ -75,6 +76,11 @@ export const collectExports = (root) => {
   return found
 }
 
+// Fixture and example files legitimately repeat definitions (a part copied
+// into a test), so they are excluded from the duplicate GATE. Duplication in
+// library code is the thing worth blocking.
+const FIXTURE_PATH = /(^|\/)(tests?|fixtures?|examples?|__fixtures__|__snapshots__|stories)\//
+
 // Exported symbols ADDED by a branch, from its diff against the base. Used to
 // answer the only question that matters at review time: does this new helper
 // already exist somewhere?
@@ -89,24 +95,14 @@ export const addedExports = (repoDir, baseRef) => {
     if (line.startsWith("+++ b/")) file = line.slice(6)
     else if (line.startsWith("+") && !line.startsWith("+++")) {
       const m = line.slice(1).match(EXPORT_RE)
-      if (m && file && !/\.test\.|\.d\.ts$/.test(file)) out.push({ kind: m[1], name: m[2], file })
+      if (m && file && !/\.test\.|\.d\.ts$/.test(file) && !FIXTURE_PATH.test(file)) out.push({ kind: m[1], name: m[2], file })
     }
   }
   return out
 }
 
-// Importing this module must have no side effects; the CLI body only runs
-// when the file is executed directly. Realpaths, because node resolves
-// symlinks when loading a module (/tmp -> /private/tmp on macOS).
-const realpath = (p) => {
-  try {
-    return fs.realpathSync(p)
-  } catch {
-    return p
-  }
-}
 
-if (process.argv[1] && realpath(process.argv[1]) === realpath(fileURLToPath(import.meta.url))) {
+if (isMain(import.meta.url)) {
   const [root, query, flag] = process.argv.slice(2)
   if (!root || (!query && flag !== "--dupes")) {
     console.error("usage: find-helpers.mjs <root> <query> [--dupes]")
@@ -140,13 +136,14 @@ if (process.argv[1] && realpath(process.argv[1]) === realpath(fileURLToPath(impo
       console.log(`\u2713 none of the ${added.length} new export(s) shadow an existing helper`)
       process.exit(0)
     }
-    console.log(`\u26a0 ${collisions.length} new export(s) share a name with something that already exists:\n`)
+    console.log(`\u2717 ${collisions.length} new export(s) share a name with something that already exists:\n`)
     for (const { sym, elsewhere } of collisions) {
       console.log(`  ${sym.name}  (new: ${sym.file})`)
       for (const e of elsewhere.slice(0, 4)) console.log(`      also in ${e.repo}: ${e.file}:${e.line}`)
     }
-    console.log("\n  Reuse it, or say in a comment why this one differs.")
-    process.exit(0)
+    console.log("\n  Reuse the existing one, or fix it where it lives.")
+    console.log("  If this really must differ, say why in a comment and re-run with --allow-dupes.")
+    process.exit(1)
   }
 
   if (query === "--dupes" || flag === "--dupes") {

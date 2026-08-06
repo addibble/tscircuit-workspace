@@ -26,6 +26,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { isMain } from "./is-main.mjs"
 
 export const GLOBAL_FILE = "workspace.json"
 export const LOCAL_FILE = path.join(".local", "workspace.local.json")
@@ -132,20 +133,8 @@ const seed = (root, outFile) => {
   if (migrated.length) console.log(`now remove ${migrated.join(", ")} from ${GLOBAL_FILE}`)
 }
 
-// Is this file being run directly, rather than imported? Compare REAL paths:
-// node resolves symlinks when it loads a module, so on macOS (where /tmp is a
-// symlink to /private/tmp) a naive url comparison silently reports "imported",
-// the CLI body never runs, and the command exits 0 having done nothing.
-const realpath = (p) => {
-  try {
-    return fs.realpathSync(p)
-  } catch {
-    return p
-  }
-}
-const isMain = process.argv[1] && realpath(process.argv[1]) === realpath(fileURLToPath(import.meta.url))
 
-if (isMain) {
+if (isMain(import.meta.url)) {
   const [mode, root, out] = process.argv.slice(2)
   if (mode === "--explain" && root) explain(root)
   else if (mode === "--seed" && root && out) seed(root, out)

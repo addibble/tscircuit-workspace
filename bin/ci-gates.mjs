@@ -16,6 +16,7 @@
 //     before `bun run smoke-test:dist` and would silently stop doing so.
 import fs from "node:fs"
 import path from "node:path"
+import { isMain } from "./is-main.mjs"
 
 // Steps that are not gates: installs, release/bot machinery, anything that
 // rewrites files, and CI-sharding helpers.
@@ -97,7 +98,7 @@ export const ciGates = (repoDir) => {
   return [...new Set(gates)]
 }
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname)) {
+if (isMain(import.meta.url)) {
   const repoDir = process.argv[2]
   if (!repoDir) {
     console.error("usage: ci-gates.mjs <repo-dir>")

@@ -18,6 +18,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { loadConfig } from "./workspace-config.mjs"
+import { isMain } from "./is-main.mjs"
 
 /**
  * Pure graph resolution, with the filesystem injected so it can be tested
@@ -117,14 +118,7 @@ export const chainForWorkspace = (root, from, to) => {
   })
 }
 
-const realpath = (p) => {
-  try {
-    return fs.realpathSync(p)
-  } catch {
-    return p
-  }
-}
-if (process.argv[1] && realpath(process.argv[1]) === realpath(new URL(import.meta.url).pathname)) {
+if (isMain(import.meta.url)) {
   const [root, from, to] = process.argv.slice(2)
   if (!root || !from) {
     console.error("usage: rebuild-chain.mjs <workspace-root> <from> [to]")

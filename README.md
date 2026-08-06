@@ -363,6 +363,11 @@ way nothing throws on. A hand-rolled `toMm` doing `Number.parseFloat` handles
 ./tsc-dev helpers --added core    # new exports on a branch that shadow an existing helper
 ```
 
+`pr-check` **gates** on this: a branch exporting a name that already exists
+fails, alongside the repo's own CI gates. Tests, fixtures and examples are
+excluded. Reuse the existing helper, fix it where it lives, or rename yours —
+and if it genuinely must differ, say why in a comment and pass `--allow-dupes`.
+
 The canonical homes are listed in `AGENTS.md` — `format-si-unit` (via
 `circuit-json`'s `length`/`distance`) for units, `@tscircuit/math-utils` and
 `@tscircuit/circuit-json-util` for bounds, `transformation-matrix` for 2D
@@ -388,14 +393,31 @@ in `test/`, rather than in the bash:
 | `workspace-config.mjs` | layer merge: objects merge per key, arrays replace, inputs are not mutated |
 | `rebuild-chain.mjs` | dependencies precede consumers; `--to` truncation; unverified edges dropped; uncloned repos skipped; cycles reported |
 | `ci-gates.mjs` | only `pull_request` workflows; workflow order preserved; installs/bots/mutating steps excluded; no cross-file fusion |
+| `find-helpers.mjs` | which export forms are indexed; non-exports and re-exports ignored |
+| `is-main.mjs` | a CLI run through a symlinked path still counts as main |
 | `env-lock.mjs` | which discrepancies are *differences* (fail) vs *warnings* (dirty tree, extra repos) |
 | `gen-map.mjs` | only the marked block is replaced; regeneration is idempotent; missing markers error |
 
-Two conventions those modules follow, both learned from bugs found here:
-**importing a module must have no side effects** (each CLI body is behind an
-is-main guard that compares *realpaths*, since node resolves symlinks when
-loading a module), and **decision logic is pure with the filesystem injected**,
-so a test states the rule instead of building a workspace on disk.
+Two conventions those modules follow, both learned from bugs found here.
+
+**Importing a module must have no side effects.** Every CLI body sits behind
+`if (isMain(import.meta.url))` from `bin/is-main.mjs`. This has failed twice, in
+two ways that look nothing alike:
+
+- *no guard* — the CLI runs on import, inherits the test runner's argv, prints
+  usage and calls `process.exit()`, taking the whole test run with it;
+- *naive guard* — `import.meta.url === pathToFileURL(process.argv[1]).href` is
+  false whenever any path component is a symlink, because node resolves symlinks
+  when loading a module and the shell does not. The CLI then does nothing and
+  exits 0, which looks like success. `/tmp` is a symlink on macOS, so this is
+  not theoretical: it silently broke `workspace-config.mjs --explain` inside an
+  adopted workspace.
+
+`test/bin-modules.test.ts` imports every `bin/*.mjs` in a subprocess and fails
+if it produces any output, so neither form can return.
+
+**Decision logic is pure with the filesystem injected**, so a test states the
+rule instead of building a workspace on disk.
 
 There is deliberately **no root `package.json`**: bun walks up from a
 subdirectory to find one, so a root manifest would change how `bun install`

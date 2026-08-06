@@ -13,6 +13,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { loadConfig } from "./workspace-config.mjs"
+import { isMain } from "./is-main.mjs"
 
 export const BEGIN = "<!-- BEGIN GENERATED: groups (./tsc-dev gen-map) -->"
 export const END = "<!-- END GENERATED -->"
@@ -63,14 +64,7 @@ const run = (mode, root) => {
   console.log("✓ regenerated MAP.md group sections from workspace.json")
 }
 
-const realpath = (p) => {
-  try {
-    return fs.realpathSync(p)
-  } catch {
-    return p
-  }
-}
-if (process.argv[1] && realpath(process.argv[1]) === realpath(new URL(import.meta.url).pathname)) {
+if (isMain(import.meta.url)) {
   const [mode, root] = process.argv.slice(2)
   if ((mode === "write" || mode === "check") && root) run(mode, root)
   else {

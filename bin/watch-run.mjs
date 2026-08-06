@@ -18,6 +18,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { spawn } from "node:child_process"
+import { isMain } from "./is-main.mjs"
 
 // Build output and vendored code: watching these would make every build
 // retrigger itself forever.
@@ -129,11 +130,4 @@ const main = () => {
   run()
 }
 
-const realpath = (p) => {
-  try {
-    return fs.realpathSync(p)
-  } catch {
-    return p
-  }
-}
-if (process.argv[1] && realpath(process.argv[1]) === realpath(new URL(import.meta.url).pathname)) main()
+if (isMain(import.meta.url)) main()

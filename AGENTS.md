@@ -78,11 +78,15 @@ of them.
 
 Two rules those modules follow, both learned from real bugs here:
 
-- **Importing a module must have no side effects.** Each CLI body is guarded by
-  an is-main check comparing **realpaths** — node resolves symlinks when loading
-  a module, so a naive `import.meta.url` comparison reports "imported" whenever
-  a path component is a symlink (`/tmp` on macOS), and the command silently
-  exits 0 having done nothing.
+- **Importing a module must have no side effects.** Every CLI body sits behind
+  `if (isMain(import.meta.url))` from `bin/is-main.mjs`. Without a guard, the
+  CLI runs on import, reads the test runner's argv and calls `process.exit()`,
+  killing the whole run. With the *naive* guard (comparing `import.meta.url` to
+  `pathToFileURL(process.argv[1])`) it breaks the other way: node resolves
+  symlinks when loading a module but the shell does not, so behind a symlink
+  (`/tmp` on macOS) the CLI silently does nothing and exits 0. `is-main.mjs`
+  compares realpaths; `test/bin-modules.test.ts` imports every `bin/*.mjs` in a
+  subprocess and fails if it produces output, so neither form can come back.
 - **Keep the decision logic pure and inject the filesystem.** `resolveChain`,
   `compareEnvironments` and `merge` take plain data, so their tests state the
   rule rather than rebuilding a workspace on disk.
@@ -424,6 +428,18 @@ Nothing throws; a board just comes out ten times too small.
 ./tsc-dev helpers --dupes         # names already exported by several packages
 ./tsc-dev helpers --added <repo>  # new exports on a branch that shadow an existing helper
 ```
+
+**`pr-check` gates on this.** A branch that exports a name which already exists
+elsewhere fails, alongside the repo's own CI gates. Test, fixture and example
+paths are excluded, because a part definition copied into a test is legitimate.
+The gate matches on *name*, so a cross-domain collision (`getBounds(GraphicsObject)`
+vs `getBounds(number[])`) trips it too — that is intended: shadowing a name you
+already import deserves a decision, even when the implementations differ.
+
+When it fires, in order of preference: reuse the existing helper; fix the
+existing helper where it lives; rename yours so it does not shadow; or, if it
+genuinely must differ, say why in a comment and re-run with
+`./tsc-dev pr-check <repo> <branch> --allow-dupes`.
 
 Before adding a utility: search for it, and search the obvious synonyms
 (`bounds`/`bbox`/`extent`, `toMm`/`parse`/`length`). If you find one:

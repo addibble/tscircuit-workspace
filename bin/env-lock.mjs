@@ -19,6 +19,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { isMain } from "./is-main.mjs"
 
 const git = (dir, ...args) => {
   try {
@@ -199,19 +200,8 @@ const diff = (root, lockFile, quiet) => {
   )
 }
 
-// Importing this module must have no side effects: the CLI body only runs when
-// the file is executed directly. Compare REAL paths, since node resolves
-// symlinks when loading a module (/tmp -> /private/tmp on macOS).
-const realpath = (p) => {
-  try {
-    return fs.realpathSync(p)
-  } catch {
-    return p
-  }
-}
-const isMain = process.argv[1] && realpath(process.argv[1]) === realpath(fileURLToPath(import.meta.url))
 
-if (isMain) {
+if (isMain(import.meta.url)) {
   const [mode, root, arg] = process.argv.slice(2)
   if (mode === "capture" && root) {
     process.stdout.write(JSON.stringify(capture(root), null, 2) + "\n")

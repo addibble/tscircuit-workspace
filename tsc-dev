@@ -1052,25 +1052,53 @@ cmd_pr() {
 # waiting for CI, and it catches the repo-specific gates (lint:zod,
 # format:check, smoke-test:dist) that the generic test+typecheck pair misses.
 cmd_pr_check() {
-  local repo="${1:?usage: pr-check <repo> <branch>}" branch="${2:?usage: pr-check <repo> <branch>}"
+  local repo="" branch="" allow_dupes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --allow-dupes) allow_dupes=1; shift ;;
+      -*) die "unknown argument '$1'" ;;
+      *) if [ -z "$repo" ]; then repo="$1"; elif [ -z "$branch" ]; then branch="$1"; else die "unexpected argument '$1'"; fi; shift ;;
+    esac
+  done
+  [ -n "$repo" ] && [ -n "$branch" ] || die "usage: pr-check <repo> <branch> [--allow-dupes]"
   have "$repo" || die "repo '$repo' is not cloned"
   local dir; dir="$(wt_dir "$repo" "$branch")"
   [ -d "$dir" ] || die "no worktree at $dir  (create it: ./tsc-dev pr $repo $branch)"
   [ -d "$dir/node_modules" ] || { echo "▶ bun install"; (cd "$dir" && bun install); }
   local gates=() g
   while IFS= read -r g; do [ -n "$g" ] && gates+=("$g"); done < <(ci_gates "$dir")
-  [ ${#gates[@]} -gt 0 ] || { echo "⚠ no pull_request-gated commands found in $repo/.github/workflows"; return 0; }
-  echo "▶ ${#gates[@]} gate(s) from $repo/.github/workflows (pull_request-triggered)"
   local failed=() ok=0
-  for g in "${gates[@]}"; do
-    echo "=== $g"
-    if (cd "$dir" && eval "$g"); then ok=$((ok + 1)); else failed+=("$g"); fi
-  done
+  if [ ${#gates[@]} -eq 0 ]; then
+    echo "⚠ no pull_request-gated commands found in $repo/.github/workflows"
+  else
+    echo "▶ ${#gates[@]} gate(s) from $repo/.github/workflows (pull_request-triggered)"
+    for g in "${gates[@]}"; do
+      echo "=== $g"
+      if (cd "$dir" && eval "$g"); then ok=$((ok + 1)); else failed+=("$g"); fi
+    done
+  fi
+
+  # Duplicate-helper gate. Writing a utility that already exists is the most
+  # common avoidable defect here, and the copy is usually subtly wrong, so this
+  # blocks rather than advises. Fixtures and tests are excluded; --allow-dupes
+  # is the escape hatch for a genuinely different helper.
+  local base; base="$(origin_head "$repo")"
+  echo "=== duplicate helpers (new exports vs the rest of the workspace)"
+  if node "$ROOT/bin/find-helpers.mjs" "$ROOT" --added "$dir" "$base"; then
+    ok=$((ok + 1))
+  elif [ "$allow_dupes" = 1 ]; then
+    echo "  ⚠ allowed by --allow-dupes"
+    ok=$((ok + 1))
+  else
+    failed+=("duplicate helpers")
+  fi
+
+  local total=$(( ${#gates[@]} + 1 ))
   echo "————————————————————————————————————————"
   if [ ${#failed[@]} -eq 0 ]; then
-    echo "✓ $ok/${#gates[@]} gates passed in $repo:$branch"
+    echo "✓ $ok/$total gates passed in $repo:$branch"
   else
-    echo "✗ $ok/${#gates[@]} gates passed; failed:"
+    echo "✗ $ok/$total gates passed; failed:"
     for g in "${failed[@]}"; do echo "    - $g"; done
     return 1
   fi

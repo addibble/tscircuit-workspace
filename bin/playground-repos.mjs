@@ -18,6 +18,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { loadConfig } from "./workspace-config.mjs"
+import { isMain } from "./is-main.mjs"
 
 /**
  * Pure resolution, filesystem injected so the rule can be tested directly.
@@ -92,14 +93,7 @@ export const watchReposForPlayground = (root, name) => {
   })
 }
 
-const realpath = (p) => {
-  try {
-    return fs.realpathSync(p)
-  } catch {
-    return p
-  }
-}
-if (process.argv[1] && realpath(process.argv[1]) === realpath(new URL(import.meta.url).pathname)) {
+if (isMain(import.meta.url)) {
   const [root, name, flag] = process.argv.slice(2)
   if (!root || !name) {
     console.error("usage: playground-repos.mjs <root> <playground-name> [--explain]")
