@@ -16,11 +16,18 @@
 // remember.
 //
 //   usage: chain-sync.mjs <workspace-root> <tsc-dev> [--interval ms] [--quiet-for ms]
+//                         [--roots eval,runframe]
 //
 // Rebuilding the chain costs minutes (runframe is two vite bundles), so it is
 // deliberately NOT triggered per save: it waits for the watchers to go quiet,
 // then catches everything up in one pass. A burst of edits therefore costs one
 // chain rebuild, not one per file.
+//
+// It is also scoped to what the playground actually SERVES. The browser needs
+// eval (the worker) and runframe (the bundle embedding it); it does not need
+// `cli`, which `tsc-dev dev` runs from source, nor the `tscircuit` umbrella,
+// which only matters for a global install. Including those doubled the pass to
+// ~14 minutes for artifacts nothing in the loop reads.
 import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
@@ -85,17 +92,25 @@ if (isMain(import.meta.url)) {
   }
   const intervalMs = arg("--interval", 20_000)
   const quietForMs = arg("--quiet-for", 45_000)
+  const rootsArg = (() => {
+    const i = rest.indexOf("--roots")
+    return i === -1 ? null : String(rest[i + 1]).split(",").filter(Boolean)
+  })()
+  // What the browser preview reads. `cli` is run from source by `tsc-dev dev`,
+  // and `tscircuit` is only for a global install, so neither is worth minutes
+  // on every pass.
+  const roots = rootsArg ?? ["eval", "runframe"]
 
   const inlines = loadConfig(root)?.bundling?.inlines ?? {}
   log(
-    `watching the bundling graph (${Object.keys(inlines).length} consumers), ` +
+    `watching the bundling graph for ${roots.join(", ")}, ` +
       `sync after ${quietForMs / 1000}s of quiet`,
   )
 
   let lastFailureAt = 0
   for (;;) {
     const builtAt = (repo) => distBuiltAt(root, repo)
-    const stale = findStaleBundles({ inlines, builtAt })
+    const stale = findStaleBundles({ inlines, builtAt, roots })
     const everyRepo = new Set(Object.keys(inlines).concat(...Object.values(inlines)))
     const newestBuildAt = [...everyRepo]
       .map(builtAt)

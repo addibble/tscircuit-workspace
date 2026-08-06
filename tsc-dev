@@ -701,7 +701,7 @@ playground_report_stale() {
   local name="$1" line stale=""
   while IFS= read -r line; do
     [ -n "$line" ] && stale="$stale$line"$'\n'
-  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" 2>/dev/null)
+  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" eval runframe 2>/dev/null)
   [ -n "$stale" ] || return 0
   echo "  ⚠ stale bundles — what runs in the browser is NOT what the source says:"
   printf '%s' "$stale" | sed 's/^/      /'
@@ -716,7 +716,7 @@ playground_sync() {
   local stale=() repo
   while IFS= read -r repo; do
     [ -n "$repo" ] && stale+=("$repo")
-  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" 2>&1 >/dev/null)
+  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" eval runframe 2>&1 >/dev/null)
   if [ ${#stale[@]} -eq 0 ]; then
     echo "✓ nothing stale — every bundle already contains what it inlines"
     return 0

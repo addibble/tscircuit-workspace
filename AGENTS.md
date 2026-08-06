@@ -44,7 +44,7 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `rebuild <repo...>` | link local deps + build + push, **in order** (propagate a change up the chain) |
 | `rebuild --from <repo>` | same, but the chain is **computed** from `workspace.json`'s bundling graph |
 | `watch <repo>` | rebuild + push that repo on every source change (debounced) |
-| `playground <init\|start\|status\|logs\|stop>` | manage a test project and its daemons |
+| `playground <init\|start\|status\|sync\|logs\|stop>` | manage a test project and its daemons; keeps inlining consumers current |
 | `doctor [target...]` | audit yalc links (unstamped versions, npm copies that overwrote a link, stale links) |
 | `prune-store [--keep N]` | delete old `-local.*` builds from the yalc store |
 | `pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
@@ -258,6 +258,11 @@ effort (no `package.json`) are skipped. `start` is idempotent — re-run it afte
 changing the effort and only the new watcher starts — and `status` flags drift
 in both directions.
 
+`start` also pins the web viewer to one port (3020 by default, per-playground
+overridable) and reaps its own stale listener rather than drifting to the next
+free port — a drifting port silently detaches the tab you have open from the
+daemon being rebuilt.
+
 Daemons are `nohup`ed with a pid and a log in `.run/`, so they **outlive the
 session that started them**. An agent that starts them must stop them before
 finishing, or the next session inherits builds it did not start. `status` is the
@@ -280,12 +285,33 @@ nothing else exceeds 25s. But the Node path does not need runframe at all:
 | circuit JSON, exports, `tsci build`, tests | the edited package only (`push`, or let the watcher do it) | **~10-20s** |
 | browser preview (`tsci dev`) | + `eval` + `runframe` (the standalone bundle inlines the worker, which inlines core) | ~6 min |
 
+**The playground now closes that second row itself.** A watcher owns one repo,
+so it cannot know that eval bakes in core; that is a property of the bundling
+graph. `playground start` therefore also starts a `chain-<playground>` daemon
+that walks `workspace.json`'s graph against build timestamps and rebuilds
+whatever is behind, once the watchers have been quiet for 45s — so a burst of
+edits costs one chain rebuild, not one per save. `playground status` reports
+staleness, and `playground sync` forces the pass.
+
+Staleness propagates through consumers, not just up from sources: runframe
+rebuilt *after* a fix is still stale if what it embedded was a stale eval. That
+is a real case from this workspace — its own mtime was the newest of the lot
+while it served a worker built six hours earlier — and it is why the rule is
+code (`bin/stale-bundles.mjs`, with tests) rather than a paragraph here.
+
 Verified end to end: editing `core`, with only `push core`, changes the circuit
 JSON that `bin/tsci build` produces in the playground. Do not rebuild the whole
 chain reflexively — it is 20x slower and hides which level actually mattered.
 
 Use `bin/tsci` (the CLI from source) or the playground's own `bunx tsci`; both
 resolve core from `node_modules`, so both see a `push`ed change immediately.
+
+**Know which renderer you are validating.** `tsci build` resolves core and
+`create-fdm-enclosure` from `node_modules`; the browser runs them from inside
+eval's prebuilt worker; the 3D viewer resolves `jscad-electronics` itself,
+separately from `circuit-json-to-gltf`. Three paths, three answers to "is my
+fix live". Checking the convenient one and reporting the other as fixed has
+cost this workspace two debugging sessions.
 
 ## Local build versions (never hand-edit `version`)
 
