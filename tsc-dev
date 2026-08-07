@@ -16,6 +16,12 @@
 # `sync-forks` updates. Change configuration there, not in this script.
 #
 # Usage:
+#   ./tsc-dev [--fast|--full] <command> ...
+#                                     --fast (= --profile dev) builds without declaration emit and
+#                                     without steps the local dev server does not serve: measured,
+#                                     core 10.3s -> 0.3s, eval ~15s -> 1.4s, runframe ~23s -> 9.8s.
+#                                     --full (the default) is exactly what the repo's own CI runs and
+#                                     is what anything leaving this machine must use.
 #   ./tsc-dev clone [repo ...]        Clone repos from the tscircuit org (default set if none given)
 #   ./tsc-dev clone-deps <repo> [-r]  Clone the tscircuit-org repos <repo> depends on (its dependency
 #                                     closure). Add -r/--recursive to follow deps-of-deps. Great for
@@ -28,9 +34,10 @@
 #                                     (debounced; drives the repo's own build, nothing is added to it)
 #   ./tsc-dev playground <sub>        Manage a circuit project you test against, and its daemons:
 #                                       init <path> [--name n] [--watch a,b]  register it
-#                                       start [name] [--no-dev]  watchers + the web viewer (the dev
-#                                                              server starts by default; --no-dev
-#                                                              starts watchers only)
+#                                       start [name] [--no-dev] [--full]  watchers + the web viewer
+#                                                              (the dev server starts by default;
+#                                                              --no-dev starts watchers only; builds
+#                                                              use the fast dev profile unless --full)
 #                                       status [name]          what is running, from any shell
 #                                       logs <daemon> [lines]  tail a daemon's log
 #                                       stop | restart         daemons survive an agent session, so
@@ -42,6 +49,12 @@
 #                                     claims a releasable version, an npm copy that has overwritten a
 #                                     link, and stale (unpushed) links. Targets are repo names or
 #                                     paths; defaults to every linked repo + project yalc knows about.
+#                                       --verify-running [url]  ask the DEV SERVER what it is serving:
+#                                                               extract every build stamp embedded in
+#                                                               the bundle and compare it with what
+#                                                               this workspace has built. The only
+#                                                               check that can catch a stale bundle or
+#                                                               a wrong cache hit.
 #   ./tsc-dev prune-store [--keep N]  Delete old `-local.*` builds from the yalc store (default keep 2
 #                                     newest per package). Released versions are never touched.
 #   ./tsc-dev pr <repo> <branch>      Create an ISOLATED worktree off upstream main for a small
@@ -118,6 +131,13 @@
 #   ./tsc-dev gen-map [--check]       Regenerate MAP.md's group sections from workspace.json (or
 #                                     verify they are in sync, for CI / pre-commit)
 #   ./tsc-dev test [path...]          Run the workspace's own tests (bun test ./test/)
+#   ./tsc-dev timings [--repo r]      What builds actually cost, from .run/timings.jsonl
+#   ./tsc-dev cache <sub>             The local content-addressed build cache:
+#                                       status              entries and size
+#                                       prune [--keep N]    drop all but N newest per target
+#                                       verify <repo>       rebuild and compare with the cached
+#                                                           artifact (a wrong hit is invisible
+#                                                           at the point of use, so check it)
 #   ./tsc-dev pkgname <repo>          Print the npm package name a repo publishes
 #   ./tsc-dev status                  List cloned repos, their package names, and active yalc links
 #   ./tsc-dev sync-forks [repo...]    Update each fork to head of upstream main with your patches on
@@ -133,7 +153,7 @@
 #
 # LOCAL VERSIONS: publish/push/watch/rebuild stamp package.json with a throwaway
 # prerelease version — `0.0.4` is published to the yalc store as
-# `0.0.4-local.20260805T094955` — then restore package.json, so the working tree
+# `0.0.4-local.dev.7f3a91c2b04e` — then restore package.json, so the working tree
 # stays clean. This exists because versions are assigned by CI (`pver release` in
 # bun-pver-release.yml bumps package.json, publishes to npm, and commits `vX.Y.Z`
 # back to main), which means a fresh checkout's version is *exactly* the released
@@ -142,7 +162,23 @@
 # <version>) and bun's cache are keyed by version, the two silently substitute for
 # one another. A `-local.` prerelease sorts below every release, so it can never
 # collide with, or satisfy a range for, anything npm will ever mint.
-# Set TSC_DEV_NO_STAMP=1 to publish the literal package.json version instead.
+#
+# The suffix is the PROFILE plus the build's ACTION KEY (a hash of its declared
+# inputs — see bin/action-key.mjs), not a clock. Same inputs, same version, so an
+# unchanged build reuses its store entry instead of adding one; different inputs,
+# different version, so nothing can substitute for anything else. The profile is
+# part of the identity because a JS-only dev artifact must never satisfy a
+# request for a full one. Set TSC_DEV_NO_STAMP=1 to publish the literal
+# package.json version instead.
+#
+# BUILD PROFILES: `full` (default) runs exactly what the repo's own CI runs.
+# `dev` — ./tsc-dev --fast <cmd>, or TSC_DEV_PROFILE=dev, and what the playground
+# watchers use — drops declaration emit and any step workspace.json marks as
+# unused by the local dev server. Measured: declarations are 27.4s of a 65.6s
+# chain (61%) and JavaScript emit is under 0.5s of it; the browser and
+# `tsci build` read none of the declarations. The last known-good .d.ts files are
+# preserved across a dev build so editors keep resolving types, and `doctor` says
+# when what you have is preserved rather than current.
 #
 # Examples:
 #   # Just hack on core (no yalc needed — core tests are self-contained):
@@ -253,6 +289,42 @@ pj_field() {
 }
 
 # ---------------------------------------------------------------------------
+# Build profiles and the build itself
+#
+# Every build in this script goes through bin/build.mjs, which owns the four
+# properties a local build has to have: an identity derived from its inputs, a
+# profile that skips work the caller does not consume, provenance embedded in
+# the artifact, and a content-addressed cache so work already done is not
+# repeated. Nothing here shells out to `bun run build` directly any more — that
+# is what made "is dist current?" unanswerable.
+#
+# The default is `full`: identical to what the repo's own CI runs, because
+# anything that leaves this machine (publish, pr-check, a release) must be. The
+# inner loop opts into `dev` explicitly — `./tsc-dev --fast push core`, or
+# TSC_DEV_PROFILE=dev, which is what `playground start` exports for its daemons.
+# ---------------------------------------------------------------------------
+BUILD_PROFILE="${TSC_DEV_PROFILE:-}"
+
+build_profile() {
+  if [ -n "$BUILD_PROFILE" ]; then echo "$BUILD_PROFILE"; return 0; fi
+  local p; p="$(ws "w.build?.defaultProfile ?? 'full'" 2>/dev/null || echo full)"
+  echo "${p:-full}"
+}
+
+# Build one repo under the current profile. Prints what it did and why.
+run_build() {
+  local repo="$1"; shift
+  TSC_DEV_PROFILE="$(build_profile)" node "$ROOT/bin/build.mjs" build "$ROOT" "$repo" \
+    --profile "$(build_profile)" "$@"
+}
+
+# The action key of the build that is about to run — the stamped version's
+# suffix, and the thing every artifact is branded with.
+build_key() {
+  node "$ROOT/bin/build.mjs" key "$ROOT" "$1" --profile "$(build_profile)" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # Local version stamping
 #
 # Versions in this ecosystem are minted by CI, not by hand: bun-pver-release.yml
@@ -286,15 +358,28 @@ stamp_restore() {
 }
 
 # with_dev_version <repo> <cmd> [args...] — run <cmd> with <repo>/package.json
-# temporarily bearing a `-local.<stamp>` version. Restored via trap on Ctrl-C
-# too, so an interrupted `watch` cannot leave a fake version behind.
+# temporarily bearing a `-local.<profile>.<action key>` version. Restored via
+# trap on Ctrl-C too, so an interrupted `watch` cannot leave a fake version
+# behind.
+#
+# The suffix used to be the wall clock, which made every build a new identity:
+# nothing could be reused, and the store grew one directory per publish (80
+# versions of core, 3.8GB). It is now a hash of the build's declared inputs, so
+# an unchanged rebuild lands on the version it already had. Falls back to the
+# clock if the key cannot be computed (an unparseable package.json, say) — a
+# unique-but-meaningless stamp is still safer than none.
 with_dev_version() {
   local repo="$1"; shift
-  local pj="$ROOT/$repo/package.json" real base stamped rc=0
+  local pj="$ROOT/$repo/package.json" real base stamped key rc=0
   real="$(pj_field "$pj" version)"
   if [ "${TSC_DEV_NO_STAMP:-0}" = 1 ] || [ -z "$real" ]; then "$@"; return; fi
   base="${real%%-local.*}"   # also re-stamps cleanly if a previous run crashed
-  stamped="$base-local.$(date +%Y%m%dT%H%M%S)"
+  key="$(build_key "$repo" || true)"
+  if [ -n "$key" ]; then
+    stamped="$base-local.$(build_profile).${key:0:12}"
+  else
+    stamped="$base-local.$(date +%Y%m%dT%H%M%S)"
+  fi
   STAMP_PJ="$pj"; STAMP_BAK="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-pj.XXXXXX")"
   cp "$pj" "$STAMP_BAK"
   trap 'stamp_restore' EXIT INT TERM
@@ -409,7 +494,7 @@ cmd_install() {
 do_build_publish() {
   local repo="$1"
   if has_build "$repo"; then
-    echo "▶ build ($repo)"; (cd "$ROOT/$repo" && bun run build)
+    run_build "$repo"
   else
     echo "ℹ $repo has no build script (source-only package) — publishing as-is"
   fi
@@ -426,8 +511,10 @@ cmd_publish() {
 do_watch() {
   local repo="$1"
   # Drive the repo's OWN build through `push` (build + stamp + propagate), so
-  # nothing has to be added to any repo's package.json for this to work.
-  exec node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" push "$repo"
+  # nothing has to be added to any repo's package.json for this to work. The
+  # profile is passed explicitly rather than inherited, so a watcher started
+  # from any shell rebuilds the same way.
+  exec node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" --profile "$(build_profile)" push "$repo"
 }
 
 cmd_watch() {
@@ -611,17 +698,25 @@ playground_free_port() {
 }
 
 playground_start() {
-  local name="" dev_flag="" sync_flag=""
+  local name="" dev_flag="" sync_flag="" profile=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --dev) dev_flag=1; shift ;;
       --no-dev) dev_flag=0; shift ;;
       --no-sync) sync_flag=0; shift ;;
+      --fast) profile=dev; shift ;;
+      --full) profile=full; shift ;;
       -*) die "unknown argument '$1'" ;;
       *) [ -z "$name" ] && name="$1" || die "unexpected argument '$1'"; shift ;;
     esac
   done
   [ -n "$name" ] || name="$(default_playground)"
+  # A playground IS the inner loop, so its daemons default to the dev profile:
+  # no declaration emit (61% of a chain rebuild, and neither the browser nor
+  # `tsci build` reads any of it) and no build steps the local dev server does
+  # not serve. `--full` opts back into exactly-what-CI-runs when the point of
+  # the session is to reproduce a release artifact.
+  [ -n "$profile" ] || profile="${TSC_DEV_PROFILE:-dev}"
   # The web viewer is the point of a playground, so it starts by default. A
   # flag wins over config; `"dev": false` on the playground opts out durably.
   local dev="$dev_flag"
@@ -629,7 +724,7 @@ playground_start() {
     if [ "$(ws "w.playgrounds?.[args[0]]?.dev === false ? 'off' : 'on'" "$name")" = "off" ]; then dev=0; else dev=1; fi
   fi
   local dir; dir="$(playground_dir "$name")"
-  echo "▶ playground '$name' → $dir"
+  echo "▶ playground '$name' → $dir  (build profile: $profile)"
   echo "  $(playground_watch_explain "$name" | head -1)"
   local repo
   # Idempotent: already-running watchers are left alone, so re-running this
@@ -637,7 +732,7 @@ playground_start() {
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     have "$repo" || { echo "  ⚠ $repo is not cloned — skipping"; continue; }
-    start_daemon "watch-$repo" node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" push "$repo"
+    start_daemon "watch-$repo" node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" --profile "$profile" push "$repo"
   done < <(playground_watch_repos "$name")
   if [ "$dev" = 1 ]; then
     # The browser needs runframe's standalone bundle; `dev --local` serves the
@@ -659,7 +754,7 @@ playground_start() {
     # those repos, and the browser only ever runs the inlined copy. This closes
     # that loop from the bundling graph rather than from memory.
     if [ "$sync_flag" != 0 ]; then
-      start_daemon "chain-$name" node "$ROOT/bin/chain-sync.mjs" "$ROOT" "$ROOT/tsc-dev"
+      start_daemon "chain-$name" env TSC_DEV_PROFILE="$profile" node "$ROOT/bin/chain-sync.mjs" "$ROOT" "$ROOT/tsc-dev"
     fi
   fi
   echo "  ./tsc-dev playground status $name"
@@ -799,7 +894,7 @@ cmd_link() {
 
 do_build_push() {
   local repo="$1"
-  has_build "$repo" && { echo "▶ build ($repo)"; (cd "$ROOT/$repo" && bun run build); }
+  has_build "$repo" && run_build "$repo"
   echo "▶ yalc push ($repo -> $(pkgname "$repo"))"
   (cd "$ROOT/$repo" && yalc push)
 }
@@ -895,9 +990,49 @@ cmd_rebuild() {
 do_rebuild_one() {
   local repo="$1"
   if has_build "$repo"; then
-    echo "  ↳ bun run build"; (cd "$ROOT/$repo" && bun run build)
+    run_build "$repo"
   fi
   echo "  ↳ yalc push"; (cd "$ROOT/$repo" && yalc push)
+}
+
+# What builds actually cost. Every number in this workspace's docs has been
+# wrong at least once (AGENTS.md said 380s for a chain that measures 65.6s), and
+# each wrong number changed a design decision, so builds now record themselves
+# and this reads the record back.
+cmd_timings() {
+  node "$ROOT/bin/timings.mjs" "$ROOT" "$@"
+}
+
+# The local content-addressed build cache.
+cmd_cache() {
+  local sub="${1:-status}"; shift 2>/dev/null || true
+  case "$sub" in
+    status|prune) node "$ROOT/bin/build-cache.mjs" "$sub" "$@" ;;
+    verify)
+      local repo="${1:?usage: cache verify <repo>}"
+      have "$repo" || die "repo '$repo' is not cloned"
+      # Rebuilds and compares digests: a wrong cache hit is indistinguishable
+      # from a right one at the point of use, so the only defence is to redo
+      # the work occasionally and check.
+      with_dev_version "$repo" node "$ROOT/bin/build.mjs" verify "$ROOT" "$repo" --profile "$(build_profile)" ;;
+    *) die "usage: cache <status|prune [--keep N]|verify <repo>>" ;;
+  esac
+}
+
+# What a repo's linked build says about its .d.ts files. A dev-profile build
+# emits none, so tsc-dev preserves the last full build's declarations rather
+# than leaving a consumer's editor with no types at all — but preserved types
+# are STALE types, and a consumer chasing a type error deserves to be told which
+# it has.
+declarations_note() {
+  local repo="${1:-}" state
+  [ -n "$repo" ] || return 0
+  state="$(node -e 'try{const p=require(process.argv[1]);process.stdout.write(p.declarations||"")}catch(e){}' \
+    "$ROOT/$repo/dist/.tsc-dev-build.json" 2>/dev/null || true)"
+  case "$state" in
+    preserved-stale) printf '  ⚠ .d.ts preserved from an older full build (./tsc-dev --full push %s to refresh)' "$repo" ;;
+    absent) printf '  ⚠ no .d.ts in this build (./tsc-dev --full push %s)' "$repo" ;;
+  esac
 }
 
 # Audit yalc links from the CONSUMER side — the three ways a link goes wrong:
@@ -907,7 +1042,22 @@ do_rebuild_one() {
 #      link (no yalcSig present);
 #   3. node_modules is a yalc copy but an older one than .yalc/ (missed push).
 cmd_doctor() {
-  local targets=("$@") t dir problems=0 checked=0
+  local targets=() t dir problems=0 checked=0 verify_url="" verify=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --verify-running) verify=1; shift
+        case "${1:-}" in http*) verify_url="$1"; shift ;; esac ;;
+      *) targets+=("$1"); shift ;;
+    esac
+  done
+  # The one check that looks at what is RUNNING rather than at what is linked.
+  # Everything else here reads package.json files; this decodes the bundle the
+  # dev server is actually serving and reads the build stamps inside it.
+  if [ "$verify" = 1 ]; then
+    [ -n "$verify_url" ] || verify_url="http://localhost:$(playground_port "$(playground_names | head -1)")/standalone.min.js"
+    node "$ROOT/bin/verify-running.mjs" "$ROOT" "$verify_url" --repos "eval,runframe" || return 1
+    [ ${#targets[@]} -gt 0 ] || return 0
+  fi
   if [ ${#targets[@]} -eq 0 ]; then
     while IFS= read -r t; do [ -n "$t" ] && [ -d "$t" ] && targets+=("$t"); done < <(yalc_installations)
   fi
@@ -960,7 +1110,8 @@ cmd_doctor() {
         problems=$((problems + 1)); continue
       fi
       case "$yver" in
-        *-local.*) printf '    ✓ %-38s %s\n' "$name" "$yver" ;;
+        *-local.*)
+          printf '    ✓ %-38s %s%s\n' "$name" "$yver" "$(declarations_note "$owner")" ;;
         *)
           printf '    ⚠ %-38s %s — unstamped: this local build claims a version npm can also mint. Re-publish: ./tsc-dev push %s\n' \
             "$name" "$yver" "${owner:-<repo>}"
@@ -1284,7 +1435,9 @@ cmd_pr_link() {
   local dir; dir="$(wt_dir "$repo" "$branch")"
   [ -d "$dir" ] || die "no worktree at $dir  (create it: ./tsc-dev pr $repo $branch)"
   local store="$dir/.yalc-store" name; name="$(pkgname "$dep")"
-  has_build "$dep" && { echo "▶ build ($dep)"; (cd "$ROOT/$dep" && bun run build); }
+  # A PR worktree is a release-shaped artifact: always the full profile, never
+  # the dev one, whatever the ambient setting is.
+  has_build "$dep" && BUILD_PROFILE=full run_build "$dep"
   echo "▶ publish $name to the worktree's private store"
   with_dev_version "$dep" env -C "$ROOT/$dep" yalc publish --store-folder "$store"
   echo "▶ yalc add $name (in the worktree)"
@@ -1989,6 +2142,20 @@ cmd_sync_forks() {
 }
 
 main() {
+  # Global flags, before the subcommand: they change how every build in this
+  # invocation is performed, not what the subcommand means.
+  while [ $# -gt 0 ]; do
+    case "${1:-}" in
+      --fast) BUILD_PROFILE=dev; shift ;;
+      --full) BUILD_PROFILE=full; shift ;;
+      --profile) BUILD_PROFILE="${2:?--profile needs dev|full}"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  # Only exported when explicitly asked for: the playground's daemons default
+  # to the dev profile, and an unconditional export here would silently make
+  # them full again.
+  if [ -n "$BUILD_PROFILE" ]; then export TSC_DEV_PROFILE="$BUILD_PROFILE"; fi
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     clone)   cmd_clone "$@" ;;
@@ -2016,6 +2183,8 @@ main() {
     gen-map)  cmd_gen_map "$@" ;;
     helpers)  cmd_helpers "$@" ;;
     test)     cmd_test "$@" ;;
+    timings)  cmd_timings "$@" ;;
+    cache)    cmd_cache "$@" ;;
     pr-list)  cmd_pr_list "$@" ;;
     pr-rm)    cmd_pr_rm "$@" ;;
     rebuild) cmd_rebuild "$@" ;;

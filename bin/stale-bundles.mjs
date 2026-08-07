@@ -33,7 +33,7 @@ import { isMain } from "./is-main.mjs"
  *                  its standalone bundle with a placeholder where the eval
  *                  worker goes, and `dev --local` fills it per serve, so an
  *                  eval change reaches the browser through a 0.1s injection
- *                  rather than through runframe's ~8 minute vite build. Nothing
+ *                  rather than through a full runframe rebuild. Nothing
  *                  else in runframe's closure works this way: a 3d-viewer change
  *                  really is compiled into the bundle.
  * @returns [{ repo, staleAgainst: [{ repo, builtAt }], builtAt }]
@@ -121,12 +121,20 @@ export const findStaleBundles = ({
  * runframe's standalone bundle ships with a placeholder where the eval worker
  * goes; `tsc-dev dev --local` fills it from `eval/dist` on every serve. So an
  * eval change -- and everything eval inlines, which is core, props and
- * circuit-json -- reaches the browser through a 0.1s injection instead of
- * runframe's ~480s vite build.
+ * circuit-json -- reaches the browser through a 0.1s injection instead of a
+ * full runframe rebuild.
  *
- * Measured: eval builds in 13s, the eval+runframe chain in 496s on average.
- * Ten chain rebuilds in one session cost 83 minutes, almost all of it rebuilding
- * a bundle whose only stale ingredient was about to be spliced in anyway.
+ * Measured on this workspace (2026-08-07, after the orchestration fixes and the
+ * dev profile): eval builds in 1.4s and runframe in 9.8s, of which 8.4s is one
+ * Vite bundle of 3,031 modules. Earlier versions of this comment claimed
+ * runframe took ~480s and the chain 496s; both figures came from logs of a
+ * build that was spending its time in a pre-build `yalc add` loop, not in a
+ * compiler, and both outlived the defect by weeks while being quoted as reasons
+ * for design decisions. The carve-out below is right for a STRUCTURAL reason
+ * that no timing changes: the standalone ships a placeholder precisely so the
+ * worker can be spliced in afterwards, so rebuilding runframe to deliver an
+ * eval change is work with no product. `./tsc-dev timings` has the current
+ * numbers; do not restate them here.
  */
 export const INJECTED_AT_SERVE_TIME = { runframe: ["eval"] }
 

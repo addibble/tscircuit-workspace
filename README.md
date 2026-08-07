@@ -397,6 +397,12 @@ in `test/`, rather than in the bash:
 | `is-main.mjs` | a CLI run through a symlinked path still counts as main |
 | `env-lock.mjs` | which discrepancies are *differences* (fail) vs *warnings* (dirty tree, extra repos) |
 | `gen-map.mjs` | only the marked block is replaced; regeneration is idempotent; missing markers error |
+| `build-inputs.mjs` | what a build reads: tests/docs/generated files are not inputs, configs and `package.json` are; the bias is stated (over-inclusion costs a rebuild, under-inclusion ships a stale bundle silently) |
+| `build-profile.mjs` | the dev recipe is derived from the repo's own scripts: `--dts` dropped, config files wrapped, everything else untouched; skipped steps are recorded |
+| `action-key.mjs` | what is and is not part of a build's identity — the stamp and yalc specifiers are normalized out, the profile, toolchain, commands and dependency artifacts are in |
+| `build-cache.mjs` | when a build is a no-op, a restore or a rebuild; locks are broken only when their owner is dead; pruning is per package+profile |
+| `provenance.mjs` | a build stamp survives bundling, JSON escaping and base64 embedding; a stale embedded build is reported as stale, not missing |
+| `timings.mjs` | builds are grouped by repo, profile and outcome, never averaged across them |
 
 Two conventions those modules follow, both learned from bugs found here.
 
@@ -524,10 +530,17 @@ links into it. Register it once; watchers then keep it current on every save.
 ./tsc-dev playground init ../tsc-playground --effort parametric-enclosures
 ./tsc-dev playground start             # watchers + the web viewer on :3020
 ./tsc-dev playground start --no-dev    # watchers only
+./tsc-dev playground start --full      # build exactly what CI builds (slower)
 ./tsc-dev playground status            # from any shell, in any later session
 ./tsc-dev playground logs dev-tsc-playground
 ./tsc-dev playground stop
 ```
+
+A playground **is** the inner loop, so its daemons build with the `dev` profile:
+no declaration emit, and no build step the local dev server does not serve. That
+is what takes a core rebuild from 10.5s to 0.34s and the whole chain from 65.6s
+to ~11.5s. `--full` opts back into exactly-what-CI-runs when the point of the
+session is to reproduce a release artifact.
 
 The web viewer starts **by default** — `start` runs `tsc-dev dev --local`,
 serving your locally-built runframe standalone with the local eval worker
@@ -540,9 +553,9 @@ What the running viewer picks up, and what it does not:
 | Edit | Seen after |
 |---|---|
 | the playground's own `.tsx` | saving — the dev server watches the project |
-| a watched package (`core`, `props`, …) on the **Node** path (`tsci build`, exports) | the watcher's push, ~10-20s |
-| a watched package in the **browser** view | rebuilding `eval` (its webworker inlines core) and restarting the dev server, which re-injects the worker |
-| `runframe`'s own UI | rebuilding runframe (~5 min) |
+| a watched package (`core`, `props`, …) on the **Node** path (`tsci build`, exports) | the watcher's push, **~0.3-2s** with the dev profile |
+| a watched package in the **browser** view | rebuilding `eval` (its webworker inlines core) — ~1.4s — and the dev server re-injecting the worker |
+| `runframe`'s own UI | rebuilding runframe (**~10s** fast, ~23s full) |
 
 That asymmetry is inherent: the browser runs eval inside runframe's prebuilt
 bundle, so package changes reach it only when that bundle is re-inlined.
@@ -588,21 +601,45 @@ The trade-off: a genuine `package.json` edit no longer retriggers a build.
 Restart the watcher after one. A missed rebuild is cheap and visible; an
 infinite rebuild loop burns a core until noticed.
 
+A fourth loop showed up later, from the other direction: a watcher rebuilding on
+files the build never reads. core rebuilt repeatedly from `tests/**` edits at
+~13s each, every one producing a byte-identical `dist`. The watched set is now
+the repo's *declared build inputs* (`bin/build-inputs.mjs`) — the same
+declaration the build's action key hashes, so the two cannot drift apart in
+either direction.
+
 ### Rebuild only what the path you are testing needs
 
-Measured here, rebuilding the whole chain takes ~380s — and **runframe is 314s
-of it** (two full vite bundles). Nothing else exceeds 25s; `core` builds in 10s
-and the yalc copy costs 0.6s.
+Measured here — and the numbers below are the ones `./tsc-dev timings` reported
+on 2026-08-07, not folklore. Every performance figure this repo has carried has
+been wrong at least once, always because it outlived the defect it described,
+so treat these as a snapshot and re-measure rather than quote:
+
+| Build | `--full` (what CI runs) | `--fast` (dev profile) |
+|---|---|---|
+| core | 10.5s — **10.1s of it declaration emit**, 46ms of JS | **0.34s** |
+| eval | ~15s | **1.3s** |
+| runframe | ~23s (two Vite bundles + dts) | **9.7s** (one Vite bundle) |
+| core → eval → runframe, compilation only | 65.6s | **~11.5s** |
+| the same chain via `rebuild` (includes yalc) | — | **~28s** |
+| an unchanged rebuild | — | **~0.1s** |
+
+With compilation down to ~11.5s, the yalc copies are now the larger half of a
+full chain rebuild: `yalc push` ships eval's 32MB and runframe's 47MB payload
+into every consumer regardless of whether the bytes changed. Skipping that when
+the digest matches is the next local win (rung 6 in `INCREMENTAL-BUILDS.md`) and
+is not built yet — it does not affect the common case, which is one repo.
 
 The Node path does not need runframe: `eval`'s node entry and the `tscircuit`
 umbrella keep `@tscircuit/core` **external** and resolve it from `node_modules`.
 Only the browser preview needs the standalone bundle, because that inlines the
-eval worker, which inlines core.
+eval worker, which inlines core — and even then the worker is spliced in at
+serve time, so a core change usually costs an eval build, not a runframe one.
 
 | Testing | Rebuild | Cost |
 |---|---|---|
-| circuit JSON, exports, `tsci build`, tests | the edited package only | **~10-20s** |
-| browser preview (`tsci dev`) | + `eval` + `runframe` | ~6 min |
+| circuit JSON, exports, `tsci build`, tests | the edited package only | **~0.3-2s fast** |
+| browser preview (`tsci dev`) | + `eval` (+ `runframe` only if runframe changed) | **~2s**, else ~12s |
 
 Verified with a probe: editing `core` and pushing **only** `core` changed the
 circuit JSON produced in the playground, via both `bin/tsci` and the
@@ -614,8 +651,8 @@ No. `yalc link` symlinks `node_modules/<pkg>` to `.yalc/<pkg>`, which is a
 *snapshot copied from the store* — tested directly: editing the source without
 republishing leaves the consumer on the old code. Every yalc mode publishes
 built output, so yalc can shorten the copy, not the build. Since the copy is
-0.6s of an 11s cycle, the watcher (which removes the manual step, not the build)
-is the practical answer.
+0.6s, the watcher (which removes the manual step) plus the dev profile and the
+build cache (which remove the build) are the practical answer.
 
 ## Local build versions
 
@@ -641,14 +678,65 @@ error anywhere. That is exactly how a project ends up with two incompatible
 into `package.json` for the duration of the build, then restore the file:
 
 ```
-0.0.4  ->  published to the yalc store as  0.0.4-local.20260805T094955
+0.0.4  ->  published to the yalc store as  0.0.4-local.dev.7f3a91c2b04e
+                                                     │    └ 12 hex of the ACTION KEY:
+                                                     │      a hash of this build's declared
+                                                     │      inputs, manifest, dependencies,
+                                                     │      toolchain and commands
+                                                     └ the build PROFILE (dev = no .d.ts)
 ```
+
+The suffix used to be the wall clock, which was unique but meaningless: two
+builds of identical source got different identities, so nothing could ever be
+reused and the store grew one directory per publish (80 versions of core,
+3.8GB). Deriving it from the inputs keeps every property the clock had — it is
+still a prerelease, still unique per distinct build — and adds the one it
+lacked: *the same build has the same name*. The profile is in the identity
+because a JS-only artifact must never satisfy a request for a full one.
 
 A prerelease sorts *below* its release (`0.0.4-local.1` < `0.0.4`) and satisfies
 no ordinary semver range, so it can never be confused with — or silently
 accepted in place of — anything npm will ever publish. `package.json` is
 restored from a byte copy (also on Ctrl-C, via a trap), so a fake version can
 never reach a commit or a PR diff.
+
+## Build profiles, provenance and the build cache
+
+Every build goes through `bin/build.mjs`, which is where the four properties
+above are enforced. In use:
+
+```bash
+./tsc-dev --fast push core           # dev profile: no declaration emit
+./tsc-dev push core                  # full profile (default): exactly what CI runs
+./tsc-dev timings --repo core        # what it actually cost, per step
+./tsc-dev cache status               # the local content-addressed store
+./tsc-dev cache verify core          # rebuild and compare digests
+./tsc-dev doctor --verify-running    # what is the dev server ACTUALLY serving?
+```
+
+**Why a dev profile at all:** declaration emit was 27.4s of a 65.6s chain (61%),
+and all the JavaScript emit in that chain was under 0.5s. core emits its JS in
+46ms and its 8.75MB `index.d.ts` in 10.1s. Neither the browser nor `tsci build`
+reads a byte of it. The dev recipe is derived from each repo's own package.json
+scripts (drop a `--dts` flag; wrap a tsup config file with one that spreads it
+and sets `dts: false`; leave everything else alone), so a repo changing its build
+does not break it. Note `tsup-node --dts false` does **not** work — it still
+starts, and fails, a DTS build.
+
+Because a dev build emits no declarations, the last known-good ones are
+preserved into the artifact and marked `preserved-stale`; `./tsc-dev doctor`
+says so on any link whose types are stale, and `./tsc-dev --full push <repo>`
+refreshes them.
+
+**Why provenance:** three separate hours in one session went to running code
+that was not the code on disk, and a cache makes that *more* likely, because a
+wrong hit is indistinguishable from a right one at the point of use. Every build
+stamps its action key into its own JavaScript as a legal comment
+(`/*!__TSC_DEV_BUILD__ {…}`), which survives tsup inlining, base64 embedding and
+serve-time splicing — so `doctor --verify-running` can list every build inside a
+26MB served bundle and compare it with what the workspace has built, in ~0.1s.
+(An ordinary `//` comment does *not* survive: bundlers strip those. That one
+character was the difference between the mechanism working and quietly not.)
 
 ```bash
 ./tsc-dev doctor                     # audit every project yalc knows about

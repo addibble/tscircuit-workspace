@@ -119,5 +119,29 @@
       "cli": ["runframe", "eval", "circuit-json-to-gltf"],
       "tscircuit": ["cli", "runframe", "eval", "core"]
     }
+  },
+
+  "build": {
+    "description": "How a local build is performed, and what counts as one of its inputs. `profiles` says what a build DOES: 'full' is exactly what the repo's own CI runs (always used by publish, pr-check, and anything that leaves this machine), 'dev' is the inner loop — declaration emit dropped (61% of a full chain rebuild, and neither the browser nor `tsci build` reads a byte of it) and any step the local dev server does not serve skipped. `inputs` says what a build READS: one declaration used by BOTH the watchers (do not rebuild on a file the build ignores) and the action key (hash exactly what a rebuild depends on), because maintaining those separately drifts invisibly in both directions. The defaults live in bin/build-inputs.mjs and exclude tests, docs and build output; add patterns here only when a repo genuinely differs, and prefer over-inclusion — an over-narrow input set fails SILENTLY by shipping a stale bundle.",
+    "defaultProfile": "full",
+    "profiles": {
+      "dev": {
+        "skipSteps": {
+          "runframe": ["build:standalone-preview"]
+        }
+      },
+      "full": {
+        "skipSteps": {}
+      }
+    },
+    "inputs": {
+      "exclude": [],
+      "include": [],
+      "repos": {}
+    },
+    "cache": {
+      "description": "Local content-addressed store of build artifacts, keyed by the action key. Set TSC_DEV_NO_CACHE=1 to bypass it, TSC_DEV_CACHE_DIR to move it; `./tsc-dev cache status|prune|verify` inspects it.",
+      "keep": 3
+    }
   }
 }

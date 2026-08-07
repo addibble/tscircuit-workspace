@@ -18,16 +18,20 @@
 //   usage: chain-sync.mjs <workspace-root> <tsc-dev> [--interval ms] [--quiet-for ms]
 //                         [--roots eval,runframe]
 //
-// Rebuilding the chain costs minutes (runframe is two vite bundles), so it is
-// deliberately NOT triggered per save: it waits for the watchers to go quiet,
-// then catches everything up in one pass. A burst of edits therefore costs one
-// chain rebuild, not one per file.
+// Rebuilding the chain is the most expensive thing this workspace does, so it
+// is deliberately NOT triggered per save: it waits for the watchers to go
+// quiet, then catches everything up in one pass. A burst of edits therefore
+// costs one chain rebuild, not one per file. (How expensive is a moving target
+// and does not belong in a comment: `./tsc-dev timings` reports it. What was
+// here before -- "minutes", from a 496s average -- was measured on a build
+// spending its time in a yalc loop rather than in a compiler, and stayed here
+// long after that was fixed.)
 //
 // It is also scoped to what the playground actually SERVES. The browser needs
 // eval (the worker) and runframe (the bundle embedding it); it does not need
 // `cli`, which `tsc-dev dev` runs from source, nor the `tscircuit` umbrella,
-// which only matters for a global install. Including those doubled the pass to
-// ~14 minutes for artifacts nothing in the loop reads.
+// which only matters for a global install. Including those roughly doubled the
+// pass, for artifacts nothing in the loop reads.
 import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
@@ -97,7 +101,7 @@ if (isMain(import.meta.url)) {
     return i === -1 ? null : String(rest[i + 1]).split(",").filter(Boolean)
   })()
   // What the browser preview reads. `cli` is run from source by `tsc-dev dev`,
-  // and `tscircuit` is only for a global install, so neither is worth minutes
+  // and `tscircuit` is only for a global install, so neither is worth a rebuild
   // on every pass.
   const roots = rootsArg ?? ["eval", "runframe"]
 

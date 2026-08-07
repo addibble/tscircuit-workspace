@@ -17,6 +17,7 @@
 // line in a busy log, and it looks exactly like "my change did not work".
 import fs from "node:fs"
 import { isMain } from "./is-main.mjs"
+import { extractBuildKeys, MARKER } from "./provenance.mjs"
 
 const PLACEHOLDER = '"<--INJECT_TSCIRCUIT_EVAL_WEB_WORKER_BLOB_URL-->"'
 
@@ -35,7 +36,15 @@ export const hasPlaceholder = (standalone) => standalone.includes(PLACEHOLDER)
 export const injectEvalWorker = ({ standalone, worker }) => {
   const base64 = Buffer.from(worker).toString("base64")
   const blobUrl = `URL.createObjectURL(new Blob([atob("${base64}")],{type:"application/javascript"}))`
-  return standalone.split(PLACEHOLDER).join(blobUrl)
+  const injected = standalone.split(PLACEHOLDER).join(blobUrl)
+  // Lift the worker's build stamps out of the base64 and restate them in plain
+  // text. They are still recoverable from the blob (extractBuildKeys decodes
+  // it), but the question "is the browser running my eval?" gets asked with
+  // grep and curl at 2am, and base64 is precisely where that question went
+  // unanswered for six hours once already.
+  const stamps = extractBuildKeys(worker)
+  if (stamps.length === 0) return injected
+  return `${injected}\n${stamps.map((s) => `/*!${MARKER} ${JSON.stringify(s)} (injected at serve time) */`).join("\n")}\n`
 }
 
 if (isMain(import.meta.url)) {
