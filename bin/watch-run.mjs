@@ -17,8 +17,11 @@
 //     reason a build fails mid-session is a half-typed edit.
 import fs from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { spawn } from "node:child_process"
 import { isMain } from "./is-main.mjs"
+import { inputRulesFor, isBuildInput } from "./build-inputs.mjs"
+import { loadConfig } from "./workspace-config.mjs"
 
 // Build output and vendored code: watching these would make every build
 // retrigger itself forever.
@@ -51,7 +54,7 @@ export const SELF_WRITTEN = [
   /\.tsbuildinfo$/,
 ]
 
-export const shouldIgnore = (relPath) => {
+export const shouldIgnore = (relPath, inputRules = null) => {
   if (!relPath) return true
   const parts = relPath.split(path.sep)
   if (parts.some((p) => IGNORED_DIRS.has(p))) return true
@@ -61,6 +64,15 @@ export const shouldIgnore = (relPath) => {
   // Editors write to a temp name then rename; the temp write is noise.
   if (/^\d+$/.test(base) || base.endsWith(".tmp")) return true
   if (SELF_WRITTEN.some((re) => re.test(base))) return true
+  // Everything above is "this write is not a source edit". This last rule is
+  // different and stronger: the file IS a source edit, but not to anything the
+  // build reads. Measured during one session, core rebuilt repeatedly from
+  // `tests/**` edits alone at ~13s each, every one of them producing a
+  // byte-identical dist. The watched set and the hashed input set are the same
+  // declaration (bin/build-inputs.mjs) precisely so they cannot drift: a file
+  // that cannot change the output must not trigger a build, and a file that can
+  // must do both.
+  if (inputRules && !isBuildInput(relPath, inputRules)) return true
   return false
 }
 
@@ -82,6 +94,11 @@ const main = () => {
     console.error(`no such directory: ${dir}`)
     process.exit(2)
   }
+  // The repo's declared build inputs, from the workspace config layered over
+  // the defaults. Loaded once: a watcher outlives many builds.
+  const root = path.resolve(path.dirname(path.dirname(fileURLToPath(import.meta.url))))
+  const inputRules = inputRulesFor(loadConfig(root), label)
+  log(`build inputs: everything except ${inputRules.exclude.length} excluded pattern(s)`)
 
   let running = false
   let queued = false
@@ -121,7 +138,7 @@ const main = () => {
   }
 
   fs.watch(dir, { recursive: true }, (_event, filename) => {
-    if (!filename || shouldIgnore(filename)) return
+    if (!filename || shouldIgnore(filename, inputRules)) return
     schedule(filename)
   })
 
