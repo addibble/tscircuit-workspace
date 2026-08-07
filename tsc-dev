@@ -189,14 +189,39 @@ rebuild_chain() {
 default_repos() { ws "w.defaultRepos"; }
 
 # Find the cloned repo dir that publishes a given npm package name (empty if none).
+# package name -> repo directory.
+#
+# Backed by an index built once per process, because the naive form -- scan
+# every cloned repo, spawn `node` to read each package.json -- is O(repos) node
+# spawns per lookup and is called once per dependency. With ~60 repos and a
+# repo like eval declaring 20+ local deps that is ~1,200 process spawns, which
+# measured at ~3 minutes: an order of magnitude more than the 13 second build it
+# was preparing for.
+PKG_INDEX_FILE=""
+build_pkg_index() {
+  [ -n "$PKG_INDEX_FILE" ] && [ -f "$PKG_INDEX_FILE" ] && return 0
+  PKG_INDEX_FILE="$(mktemp -t tscdev-pkgindex)"
+  node -e '
+    const fs = require("node:fs")
+    const path = require("node:path")
+    const root = process.argv[1]
+    const out = []
+    for (const dir of fs.readdirSync(root)) {
+      try {
+        if (!fs.existsSync(path.join(root, dir, ".git"))) continue
+        const pkg = JSON.parse(
+          fs.readFileSync(path.join(root, dir, "package.json"), "utf8"),
+        )
+        if (pkg.name) out.push(`${pkg.name}\t${dir}`)
+      } catch {}
+    }
+    process.stdout.write(out.join("\n"))
+  ' "$ROOT" > "$PKG_INDEX_FILE" 2>/dev/null
+}
+
 repo_for_pkg() {
-  local want="$1" d r n
-  for d in "$ROOT"/*/; do
-    [ -d "$d/.git" ] || continue
-    r="$(basename "$d")"
-    n="$(node -p "require('$d/package.json').name" 2>/dev/null)" || continue
-    if [ "$n" = "$want" ]; then echo "$r"; return 0; fi
-  done
+  build_pkg_index
+  awk -F'\t' -v want="$1" '$1 == want { print $2; exit }' "$PKG_INDEX_FILE"
   return 0
 }
 
@@ -426,6 +451,9 @@ cmd_watch() {
 # which project you point at is yours, not the project's.
 # ---------------------------------------------------------------------------
 RUN_DIR="$ROOT/.run"
+# Where `yalc publish` puts local builds. A dep with no entry here has never
+# been published locally, so linking it can only be a no-op.
+YALC_STORE="${YALC_STORE:-$HOME/.yalc}"
 
 playground_path() { ws "(w.playgrounds?.[args[0]]||{}).path" "$1"; }
 
@@ -699,9 +727,13 @@ playground_status() {
 # timestamps; here we only decide what to say about the answer.
 playground_report_stale() {
   local name="$1" line stale=""
+  if [ -f "$RUN_DIR/chain.building" ]; then
+    echo "  ⧗ chain rebuild in progress: $(node -e 'const m=require(process.argv[1]);console.log(m.repos.join(" "), "since", m.startedAt.slice(11,19))' "$RUN_DIR/chain.building" 2>/dev/null)"
+    echo "    (timestamps below are mid-build and not meaningful yet)"
+  fi
   while IFS= read -r line; do
     [ -n "$line" ] && stale="$stale$line"$'\n'
-  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" eval runframe 2>/dev/null)
+  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" --injected eval runframe 2>/dev/null)
   [ -n "$stale" ] || return 0
   echo "  ⚠ stale bundles — what runs in the browser is NOT what the source says:"
   printf '%s' "$stale" | sed 's/^/      /'
@@ -716,7 +748,7 @@ playground_sync() {
   local stale=() repo
   while IFS= read -r repo; do
     [ -n "$repo" ] && stale+=("$repo")
-  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" eval runframe 2>&1 >/dev/null)
+  done < <(node "$ROOT/bin/stale-bundles.mjs" "$ROOT" --injected eval runframe 2>&1 >/dev/null)
   if [ ${#stale[@]} -eq 0 ]; then
     echo "✓ nothing stale — every bundle already contains what it inlines"
     return 0
@@ -818,11 +850,30 @@ cmd_rebuild() {
     have "$repo" || die "repo '$repo' is not cloned"
     echo "=== rebuilding $repo ($(pkgname "$repo")) ==="
     # Link any dependency that is also a cloned repo in this workspace.
+    #
+    # Skipped when the link is already current, which it usually is: the
+    # watchers `push` a rebuilt package straight into every consumer, so by the
+    # time a chain rebuild runs there is nothing to re-add. Each `yalc add`
+    # costs 5-9 seconds, and a repo like eval has 20+ local deps -- 3 minutes of
+    # relinking in front of a 13 second build.
+    local linked_ver store_ver
     while IFS= read -r dep; do
       [ -n "$dep" ] || continue
       name="$(repo_for_pkg "$dep")"
       [ -n "$name" ] || continue            # dep is not a local repo
       [ "$name" = "$repo" ] && continue      # don't self-link
+      # Never published to the local store: `yalc add` would spend ~9 seconds
+      # to print "Could not find package in store, skipping". 17 of eval's 18
+      # local deps are in this state, which is most of a 3 minute rebuild.
+      [ -d "$YALC_STORE/packages/$dep" ] || continue
+      linked_ver="$(node -p "require('$ROOT/$repo/node_modules/$dep/package.json').version" 2>/dev/null || echo "")"
+      store_ver="$(node -p "require('$ROOT/$name/package.json').version" 2>/dev/null || echo "")"
+      # A stamped local build carries the store version as its prefix; anything
+      # else (an npm copy, a missing link, an older stamp) needs the add.
+      case "$linked_ver" in
+        "$store_ver"-local.*|"$store_ver")
+          continue ;;
+      esac
       echo "  ↳ yalc add $dep (local)"
       (cd "$ROOT/$repo" && yalc add "$dep" >/dev/null)
     done < <(dep_names "$repo")
@@ -830,6 +881,13 @@ cmd_rebuild() {
     # Stamping starts here, AFTER the `yalc add` loop above: the stamp restores
     # package.json from a backup, which would otherwise revert those links.
     with_dev_version "$repo" do_rebuild_one "$repo"
+    # A runframe build wipes dist/, taking the injected local bundle with it.
+    # Regenerate it here rather than at dev-server startup, or `dev --local`
+    # falls back to the published runframe and the browser silently stops
+    # running local code.
+    if [ "$repo" = "runframe" ] || [ "$repo" = "eval" ]; then
+      refresh_local_runframe_bundle && echo "  ↳ refreshed standalone.local.min.js"
+    fi
   done
   echo "✓ rebuilt: ${repos[*]}"
 }
@@ -963,6 +1021,22 @@ cmd_prune_store() {
   echo "✓ removed $removed stale local build(s), kept $kept (released versions untouched)"
 }
 
+# Fill runframe's eval-worker placeholder with the locally built worker.
+#
+# Regenerated after every runframe build, not once when the dev server starts:
+# a rebuild wipes runframe/dist, taking the injected copy with it, and the dev
+# server then silently serves the PUBLISHED runframe -- so the page runs
+# somebody else's core and every local change is invisible. Adding automatic
+# chain rebuilds made that a routine occurrence rather than a rare one.
+#
+# Returns 1 (and writes nothing) when there is nothing to inject.
+refresh_local_runframe_bundle() {
+  local sa="$ROOT/runframe/dist/standalone.min.js"
+  local worker="$ROOT/eval/dist/webworker/entrypoint.js"
+  local out="$ROOT/runframe/dist/standalone.local.min.js"
+  node "$ROOT/bin/inject-eval-worker.mjs" "$sa" "$worker" "$out" 2>/dev/null
+}
+
 cmd_dev() {
   have cli || die "clone+install the cli first: ./tsc-dev clone cli && ./tsc-dev install cli"
   local cli_main="$ROOT/cli/cli/main.ts"
@@ -999,9 +1073,8 @@ cmd_dev() {
     # tscircuit umbrella normally fills it). If we don't fill it, the browser
     # falls back to the CDN/published eval — not our rebuilt one. Fill it with
     # the local eval webworker so `tsci dev --local` truly uses local eval+core.
-    if [ -f "$worker" ] && grep -q "INJECT_TSCIRCUIT_EVAL_WEB_WORKER_BLOB_URL" "$sa"; then
+    if refresh_local_runframe_bundle; then
       served="$ROOT/runframe/dist/standalone.local.min.js"
-      node -e 'const fs=require("fs");const sa=fs.readFileSync(process.argv[1],"utf8");const w=fs.readFileSync(process.argv[2],"utf8");const b=Buffer.from(w).toString("base64");const e=`URL.createObjectURL(new Blob([atob("${b}")],{type:"application/javascript"}))`;fs.writeFileSync(process.argv[3], sa.replace(/"<--INJECT_TSCIRCUIT_EVAL_WEB_WORKER_BLOB_URL-->"/g,e));' "$sa" "$worker" "$served"
       echo "  ⊙ filled eval-worker placeholder with local eval"
     fi
     export RUNFRAME_STANDALONE_FILE_PATH="$served"

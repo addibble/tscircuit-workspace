@@ -130,3 +130,37 @@ test("the description names the newest offender", () => {
 
   expect(describeStale(stale)[0]).toContain("is older than")
 })
+
+/**
+ * The single most expensive mistake this module can make is telling the caller
+ * to rebuild runframe. Measured on this workspace: eval builds in 13s and
+ * runframe in ~480s, so a chain that includes runframe costs 8 minutes and one
+ * that stops at eval costs 15 seconds.
+ *
+ * runframe does not need rebuilding for an eval change, because its standalone
+ * bundle ships with a placeholder where the eval worker goes and `dev --local`
+ * fills it per serve. Ten chain rebuilds in one session spent 83 minutes almost
+ * entirely on this.
+ */
+test("a dep spliced in at serve time does not make its consumer stale", () => {
+  const stale = findStaleBundles({
+    inlines: { eval: ["core"], runframe: ["eval", "3d-viewer"] },
+    builtAt: at({ core: 200, eval: 100, runframe: 100, "3d-viewer": 50 }),
+    injectedAtServeTime: { runframe: ["eval"] },
+  })
+
+  // eval is stale against core and must be rebuilt ...
+  expect(stale.map((s) => s.repo)).toEqual(["eval"])
+})
+
+test("a dep that is genuinely compiled in still makes its consumer stale", () => {
+  const stale = findStaleBundles({
+    inlines: { eval: ["core"], runframe: ["eval", "3d-viewer"] },
+    builtAt: at({ core: 50, eval: 100, runframe: 100, "3d-viewer": 200 }),
+    injectedAtServeTime: { runframe: ["eval"] },
+  })
+
+  // 3d-viewer is React that vite compiles into the bundle: no shortcut exists.
+  expect(stale.map((s) => s.repo)).toEqual(["runframe"])
+  expect(stale[0]!.staleAgainst[0]!.repo).toBe("3d-viewer")
+})

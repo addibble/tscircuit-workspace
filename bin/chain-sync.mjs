@@ -32,7 +32,7 @@ import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { isMain } from "./is-main.mjs"
-import { findStaleBundles, describeStale } from "./stale-bundles.mjs"
+import { findStaleBundles, describeStale, INJECTED_AT_SERVE_TIME } from "./stale-bundles.mjs"
 import { loadConfig } from "./workspace-config.mjs"
 
 const now = () => Date.now()
@@ -110,7 +110,12 @@ if (isMain(import.meta.url)) {
   let lastFailureAt = 0
   for (;;) {
     const builtAt = (repo) => distBuiltAt(root, repo)
-    const stale = findStaleBundles({ inlines, builtAt, roots })
+    const stale = findStaleBundles({
+      inlines,
+      builtAt,
+      roots,
+      injectedAtServeTime: INJECTED_AT_SERVE_TIME,
+    })
     const everyRepo = new Set(Object.keys(inlines).concat(...Object.values(inlines)))
     const newestBuildAt = [...everyRepo]
       .map(builtAt)
@@ -130,10 +135,21 @@ if (isMain(import.meta.url)) {
       for (const line of describeStale(stale)) log(`stale: ${line}`)
       const order = stale.map((s) => s.repo)
       log(`▶ rebuild ${order.join(" ")}  (${reason})`)
+      // Recorded so `playground status` can say "rebuilding" instead of
+      // reporting the timestamps it happens to see mid-build, which look
+      // current the moment the first artifact is written.
+      const marker = path.join(root, ".run", "chain.building")
+      fs.writeFileSync(
+        marker,
+        JSON.stringify({ repos: order, startedAt: new Date().toISOString() }),
+      )
       const result = spawnSync(tscDev, ["rebuild", ...order], {
         cwd: root,
         stdio: "inherit",
       })
+      try {
+        fs.unlinkSync(marker)
+      } catch {}
       if (result.status === 0) {
         log(`✓ chain current: ${order.join(" ")}`)
       } else {

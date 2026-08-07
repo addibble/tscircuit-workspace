@@ -27,19 +27,42 @@ import { isMain } from "./is-main.mjs"
  * @param roots     repos to consider as consumers worth reporting (e.g. the
  *                  ones the playground actually serves). Defaults to every
  *                  consumer in the graph.
+ * @param injectedAtServeTime
+ *                  consumer -> deps that do NOT require rebuilding it, because
+ *                  the serving path splices them in afterwards. runframe ships
+ *                  its standalone bundle with a placeholder where the eval
+ *                  worker goes, and `dev --local` fills it per serve, so an
+ *                  eval change reaches the browser through a 0.1s injection
+ *                  rather than through runframe's ~8 minute vite build. Nothing
+ *                  else in runframe's closure works this way: a 3d-viewer change
+ *                  really is compiled into the bundle.
  * @returns [{ repo, staleAgainst: [{ repo, builtAt }], builtAt }]
  *          in dependency order (a stale consumer is listed after the stale
  *          dependency that made it stale, so rebuilding in order fixes it).
  */
-export const findStaleBundles = ({ inlines, builtAt, roots = null }) => {
+export const findStaleBundles = ({
+  inlines,
+  builtAt,
+  roots = null,
+  injectedAtServeTime = {},
+}) => {
+  const isInjected = (consumer, dep) =>
+    (injectedAtServeTime[consumer] ?? []).includes(dep)
   // Transitive closure: eval inlines core, core inlines create-fdm-enclosure,
   // so a create-fdm-enclosure build makes eval stale even though the graph has
   // no direct edge between them.
-  const closure = (consumer, seen = new Set()) => {
+  //
+  // A dep spliced in at serve time prunes its whole subtree, not just its own
+  // edge: if runframe receives eval by injection, it receives everything eval
+  // inlined -- core, props, circuit-json -- by the same route. Pruning only the
+  // edge leaves runframe stale against core and rebuilds it anyway, which is
+  // the entire cost this exists to avoid.
+  const closure = (root, consumer = root, seen = new Set()) => {
     for (const dep of inlines[consumer] ?? []) {
       if (seen.has(dep)) continue
+      if (isInjected(root, dep)) continue
       seen.add(dep)
-      closure(dep, seen)
+      closure(root, dep, seen)
     }
     return seen
   }
@@ -75,6 +98,7 @@ export const findStaleBundles = ({ inlines, builtAt, roots = null }) => {
     //     regardless of its own mtime. Staleness has to propagate through
     //     consumers, not just up from sources.
     for (const dep of inlines[consumer] ?? []) {
+      if (isInjected(consumer, dep)) continue
       if (!staleness.has(dep)) continue
       offenders.push({ repo: dep, builtAt: builtAt(dep), inheritedStale: true })
     }
@@ -91,6 +115,21 @@ export const findStaleBundles = ({ inlines, builtAt, roots = null }) => {
     .map((repo) => staleness.get(repo))
 }
 
+/**
+ * Deps a consumer receives at serve time rather than at build time.
+ *
+ * runframe's standalone bundle ships with a placeholder where the eval worker
+ * goes; `tsc-dev dev --local` fills it from `eval/dist` on every serve. So an
+ * eval change -- and everything eval inlines, which is core, props and
+ * circuit-json -- reaches the browser through a 0.1s injection instead of
+ * runframe's ~480s vite build.
+ *
+ * Measured: eval builds in 13s, the eval+runframe chain in 496s on average.
+ * Ten chain rebuilds in one session cost 83 minutes, almost all of it rebuilding
+ * a bundle whose only stale ingredient was about to be spliced in anyway.
+ */
+export const INJECTED_AT_SERVE_TIME = { runframe: ["eval"] }
+
 /** Human-readable one-liner per stale consumer. */
 export const describeStale = (stale) =>
   stale.map(({ repo, staleAgainst }) => {
@@ -104,7 +143,9 @@ export const describeStale = (stale) =>
   })
 
 if (isMain(import.meta.url)) {
-  const [root, ...roots] = process.argv.slice(2)
+  const argv = process.argv.slice(2)
+  const useInjection = argv.includes("--injected")
+  const [root, ...roots] = argv.filter((a) => a !== "--injected")
   const { loadConfig } = await import("./workspace-config.mjs")
   const fs = await import("node:fs")
   const path = await import("node:path")
@@ -145,6 +186,7 @@ if (isMain(import.meta.url)) {
     inlines,
     builtAt,
     roots: roots.length > 0 ? roots : null,
+    injectedAtServeTime: useInjection ? INJECTED_AT_SERVE_TIME : {},
   })
   for (const line of describeStale(stale)) console.log(line)
   for (const { repo } of stale) console.error(repo)
