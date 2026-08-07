@@ -45,7 +45,8 @@ tscircuit repos** (siblings: `core/`, `eval/`, `props/`, ...). Key facts:
 | `rebuild --from <repo>` | same, but the chain is **computed** from `workspace.json`'s bundling graph |
 | `watch <repo>` | rebuild + push that repo on every source change (debounced) |
 | `playground <init\|start\|status\|sync\|logs\|stop>` | manage a test project and its daemons; keeps inlining consumers current |
-| `doctor [target...]` | audit yalc links (unstamped versions, npm copies that overwrote a link, stale links); `--verify-running` asks the dev server what it is actually serving |
+| `doctor [target...]` | audit yalc links (unstamped versions, npm copies that overwrote a link, stale links, leftover version stamps); `--verify-running` asks the dev server what it is actually serving |
+| `unstamp [repo...]` | undo a version stamp left behind by a build that was killed |
 | `prune-store [--keep N]` | delete old `-local.*` builds from the yalc store |
 | `cache <status\|prune\|verify>` | the local content-addressed build cache |
 | `timings [--repo r]` | what builds actually cost, from `.run/timings.jsonl` |
@@ -247,10 +248,20 @@ watchers keep it current:
 ./tsc-dev playground init ../tsc-playground --effort parametric-enclosures
 ./tsc-dev playground start            # watchers + web viewer on :3020 (default)
 ./tsc-dev playground start --no-dev   # watchers only
+./tsc-dev playground start --full     # build what CI builds, not the dev profile
 ./tsc-dev playground status           # works from any shell, or a later session
 ./tsc-dev playground logs dev-tsc-playground
 ./tsc-dev playground stop             # ALWAYS stop when you finish
 ```
+
+`start` makes the bundling chain consistent **before** the viewer serves
+anything, and then reports what the server is actually serving. Both matter for
+the same reason: the watchers rebuild their own repos, nothing rebuilds the
+bundles that inline them, and the chain daemon's first pass is 45s of quiet
+away — so a page loaded in that window gets an eval worker with a different core
+inlined than every other path resolves, and keeps it until it is reloaded.
+`status` shows the same verification, because a page keeps the worker it loaded
+with: the graph can be current while your tab is not.
 
 The web viewer starts by default at `http://localhost:3020/`. It picks up edits
 to the playground's own `.tsx` on save, and Node-path changes (`tsci build`,
@@ -418,8 +429,31 @@ an embedded clock, an absolute path or an unstable chunk id in that repo's build
 
 **4. Provenance in the bytes.** See the previous section. `dist/.tsc-dev-build.json`
 carries the full record (action key, profile, artifact digest, which steps ran,
-whether declarations are current/preserved/absent); the banner inside each JS
-file carries enough to identify it after five levels of bundling.
+whether declarations are current/preserved/absent); every emitted JS file
+carries the stamp twice — as a legal comment (`/*!`), which esbuild and tsup
+keep and `grep` finds, and as an assignment to `globalThis.__TSC_DEV_BUILD__`,
+which survives **Vite**, since Vite strips comments outright. Without the second
+form, everything compiled into runframe's standalone (3d-viewer, circuit-to-svg)
+was invisible to the check and got reported "missing" from a bundle that
+certainly contained it.
+
+`--verify-running` fails only on a **superseded** embed — a build of X is in
+there and it is not the current one. A package that is simply not bundled
+(`cli` never is; `circuit-json-to-gltf` is external) is reported, not failed:
+the bundling graph is deliberately a superset, and a check that cries wolf
+stops being read.
+
+### Four ways a local build used to go wrong quietly
+
+Each of these is now caught by the tooling rather than by a confusing symptom
+hours later:
+
+| Symptom | What was happening | Now |
+|---|---|---|
+| the browser runs code you did not write | a bundle embeds a superseded build | `doctor --verify-running`, and `playground start` refuses to serve before the chain is consistent |
+| a rebuild "succeeds" but nothing changes | **the build failed and the previous `dist` was published anyway** — `set -e` is disabled inside `with_dev_version`'s `\|\|` list, so a failed build fell through to `yalc push` | the build result is checked explicitly; a failed build publishes nothing and stops the chain |
+| a consumer's build breaks on a missing export | a local checkout OLDER than the consumer's declared range got linked over a working npm copy | `bin/link-plan.mjs` refuses the link and says so |
+| `git status` shows a version bump you did not make | a build was killed with `-9`, skipping the stamp restore | `doctor` reports it; `./tsc-dev unstamp <repo>` fixes it |
 
 ## Local build versions (never hand-edit `version`)
 

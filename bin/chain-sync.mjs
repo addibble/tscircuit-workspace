@@ -16,7 +16,14 @@
 // remember.
 //
 //   usage: chain-sync.mjs <workspace-root> <tsc-dev> [--interval ms] [--quiet-for ms]
-//                         [--roots eval,runframe]
+//                         [--roots eval,runframe] [--once]
+//
+// `--once` performs a single pass and exits, which is what `playground start`
+// uses: the viewer must not begin serving a bundle the graph already knows is
+// stale, and the daemon's first pass is 45 seconds away. That window is not
+// theoretical -- it is exactly one page load wide, and a page loaded inside it
+// runs an eval worker with a different core inlined than the one every other
+// path resolves.
 //
 // Rebuilding the chain is the most expensive thing this workspace does, so it
 // is deliberately NOT triggered per save: it waits for the watchers to go
@@ -96,6 +103,7 @@ if (isMain(import.meta.url)) {
   }
   const intervalMs = arg("--interval", 20_000)
   const quietForMs = arg("--quiet-for", 45_000)
+  const once = rest.includes("--once")
   const rootsArg = (() => {
     const i = rest.indexOf("--roots")
     return i === -1 ? null : String(rest[i + 1]).split(",").filter(Boolean)
@@ -107,8 +115,10 @@ if (isMain(import.meta.url)) {
 
   const inlines = loadConfig(root)?.bundling?.inlines ?? {}
   log(
-    `watching the bundling graph for ${roots.join(", ")}, ` +
-      `sync after ${quietForMs / 1000}s of quiet`,
+    once
+      ? `one pass over the bundling graph for ${roots.join(", ")}, after ${quietForMs / 1000}s of quiet`
+      : `watching the bundling graph for ${roots.join(", ")}, ` +
+          `sync after ${quietForMs / 1000}s of quiet`,
   )
 
   let lastFailureAt = 0
@@ -156,10 +166,15 @@ if (isMain(import.meta.url)) {
       } catch {}
       if (result.status === 0) {
         log(`✓ chain current: ${order.join(" ")}`)
+        if (once) process.exit(0)
       } else {
         lastFailureAt = now()
         log(`✗ rebuild failed (exit ${result.status}) — backing off 60s`)
+        if (once) process.exit(1)
       }
+    } else if (once && stale.length === 0) {
+      log("✓ nothing stale — every bundle already contains what it inlines")
+      process.exit(0)
     }
 
     await new Promise((resolve) => setTimeout(resolve, intervalMs))

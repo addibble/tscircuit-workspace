@@ -40,13 +40,33 @@ export const SIDECAR = ".tsc-dev-build.json"
  * The one-line comment appended to every emitted JS file.
  *
  * A LEGAL comment (`/*!`), not a plain one, and that detail is the whole point:
- * esbuild, terser and Vite all strip ordinary comments when they bundle, so a
- * `//` banner vanished the moment eval inlined core — measured, the first time
- * this was tried. Legal comments are preserved by default, so the stamp
- * survives every level of inlining down to the standalone bundle.
+ * esbuild and terser strip ordinary comments when they bundle, so a `//` banner
+ * vanished the moment eval inlined core — measured, the first time this was
+ * tried. Legal comments are preserved by default, so the stamp survives tsup
+ * and stays greppable in the raw artifact.
  */
 export const bannerFor = ({ repo, pkg, profile, key, version }) =>
   `\n/*!${MARKER} ${JSON.stringify({ repo, pkg, profile, key, version })} */\n`
+
+/**
+ * The same record as executable code.
+ *
+ * A legal comment is enough for everything that reaches the browser through
+ * eval's worker. It is NOT enough for runframe's Vite bundle, which drops
+ * comments entirely: 3d-viewer and circuit-to-svg are compiled into the
+ * standalone and their stamps disappeared, so the check reported them
+ * "missing" from a bundle that certainly contained them — exactly the false
+ * answer this mechanism exists to prevent.
+ *
+ * A top-level assignment to a global cannot be minified away or tree-shaken
+ * (it is a side effect on an unknown object), so it survives any bundler, stays
+ * greppable as a string literal, and gives the browser console
+ * `__TSC_DEV_BUILD__`: the list of every local build that went into the page.
+ */
+export const runtimeStampFor = ({ repo, pkg, profile, key, version }) =>
+  `globalThis.${MARKER}=(globalThis.${MARKER}||[]).concat(${JSON.stringify(
+    `${MARKER} ${JSON.stringify({ repo, pkg, profile, key, version })}`,
+  )});\n`
 
 /**
  * Every build record embedded anywhere in a text artifact, in order.
@@ -67,12 +87,16 @@ export const extractBuildKeys = (text, depth = 2) => {
   const out = []
   const re = new RegExp(`${MARKER}\\s+(\\{.*?\\})`, "g")
   for (const m of String(text).matchAll(re)) {
-    const raw = m[1]
-    for (const candidate of [raw, raw.replace(/\\"/g, '"').replace(/\\\\/g, "\\")]) {
+    // Each level of embedding escapes the quotes again (a worker inside a
+    // string literal inside a bundle), so peel until it parses.
+    let candidate = m[1]
+    for (let level = 0; level < 4; level++) {
       try {
         out.push(JSON.parse(candidate))
         break
-      } catch {}
+      } catch {
+        candidate = candidate.replace(/\\"/g, '"').replace(/\\\\/g, "\\")
+      }
     }
   }
   if (depth > 0) {
@@ -102,9 +126,15 @@ export const extractBuildKeys = (text, depth = 2) => {
  *
  * @param found     records extracted from the served artifact
  * @param expected  { repo: { key, profile, version } } from each repo's sidecar
- * @returns [{ repo, status: "ok"|"stale"|"missing"|"unknown", ... }]
- *          "stale"   — a build of that repo is embedded, but not the current one
- *          "missing" — the repo should be embedded and is not
+ * @returns [{ repo, status: "ok"|"stale"|"absent"|"unknown", ... }]
+ *          "stale"   — a build of that repo is embedded, but not the current one.
+ *                      This is the only status that proves something is wrong,
+ *                      and it is the failure this check exists for.
+ *          "absent"  — no stamp for that repo in the artifact. NOT a failure:
+ *                      the bundling graph is deliberately a superset, `cli` is
+ *                      never in the browser bundle at all, and a dependency can
+ *                      be external rather than inlined. Reporting those as
+ *                      failures is how a check stops being believed.
  *          "unknown" — something is embedded that the workspace did not build
  */
 export const compareRunning = (found, expected) => {
@@ -113,7 +143,7 @@ export const compareRunning = (found, expected) => {
   const out = []
   for (const [repo, want] of Object.entries(expected)) {
     const got = byRepo.get(repo)
-    if (!got) out.push({ repo, status: "missing", expected: want.key })
+    if (!got) out.push({ repo, status: "absent", expected: want.key })
     else if (got.key !== want.key)
       out.push({ repo, status: "stale", expected: want.key, actual: got.key, profile: got.profile })
     else out.push({ repo, status: "ok", key: got.key, profile: got.profile })
@@ -162,9 +192,13 @@ export const bannerTargets = (distDir) => {
   return out.sort()
 }
 
-/** Append the banner to every emitted JS file that does not already carry it. */
+/**
+ * Append the stamp to every emitted JS file, in both forms — a legal comment
+ * for esbuild/tsup and grep, an assignment for Vite, which strips comments.
+ */
 export const stampArtifacts = (distDir, record) => {
   const banner = bannerFor(record)
+  const runtime = runtimeStampFor(record)
   let stamped = 0
   for (const file of bannerTargets(distDir)) {
     let text
@@ -173,10 +207,10 @@ export const stampArtifacts = (distDir, record) => {
     } catch {
       continue
     }
-    // A bundle can legitimately contain OTHER repos' banners (that is the
+    // A bundle can legitimately contain OTHER repos' stamps (that is the
     // point); only skip when this exact record is already present.
     if (text.includes(`"key":"${record.key}"`) && text.includes(`"repo":"${record.repo}"`)) continue
-    fs.appendFileSync(file, banner)
+    fs.appendFileSync(file, `${banner}${runtime}`)
     stamped++
   }
   return stamped

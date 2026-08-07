@@ -326,6 +326,17 @@ export const buildRepo = (root, repo, opts = {}) => {
     const artifactDigest = digestDir(distDir)
     log(`  ↳ ${stamped} artifact(s) stamped ${key.slice(0, 12)}; digest ${artifactDigest.slice(0, 12)}`)
 
+    // Record provenance BEFORE the artifact is tarred into the cache, or the
+    // cached copy carries the PREVIOUS build's sidecar and a restore starts by
+    // lying about what it just restored. Found by restoring an entry by hand
+    // while debugging: the tar said it was a build that had been replaced.
+    const outcome = finish("built", {
+      builtAt: new Date().toISOString(),
+      artifactDigest,
+      declarations,
+      steps: stepTimings,
+    })
+
     if (useCache) {
       try {
         const { bytes } = storeEntry({
@@ -354,12 +365,7 @@ export const buildRepo = (root, repo, opts = {}) => {
         log(`  ⚠ could not populate the build cache: ${e.message}`)
       }
     }
-    return finish("built", {
-      builtAt: new Date().toISOString(),
-      artifactDigest,
-      declarations,
-      steps: stepTimings,
-    })
+    return outcome
   })
 }
 

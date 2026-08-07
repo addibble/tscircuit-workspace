@@ -65,7 +65,8 @@ commands. Common ones:
 | `./tsc-dev watch <repo>` | rebuild + `yalc push` that repo on every source change (debounced) |
 | `./tsc-dev playground <sub>` | register a test project and manage its watcher/dev-server daemons |
 | `./tsc-dev unlink <consumer>` | `yalc remove --all` + `bun install` (restore npm versions) |
-| `./tsc-dev doctor [target...]` | audit yalc links: unstamped versions, npm copies that overwrote a link, stale links |
+| `./tsc-dev doctor [target...]` | audit yalc links: unstamped versions, npm copies that overwrote a link, stale links, leftover version stamps (`--verify-running` asks the dev server what it serves) |
+| `./tsc-dev unstamp [repo...]` | undo a version stamp left behind by a build that was killed |
 | `./tsc-dev prune-store [--keep N]` | delete old `-local.*` builds from the yalc store (released versions untouched) |
 | `./tsc-dev pr <repo> <branch>` | isolated worktree off upstream main for a small upstream fix (`--pick`, `--take`) |
 | `./tsc-dev pr-check <repo> <branch>` | run the gates CI runs on a PR, derived from that repo's workflows |
@@ -401,7 +402,8 @@ in `test/`, rather than in the bash:
 | `build-profile.mjs` | the dev recipe is derived from the repo's own scripts: `--dts` dropped, config files wrapped, everything else untouched; skipped steps are recorded |
 | `action-key.mjs` | what is and is not part of a build's identity — the stamp and yalc specifiers are normalized out, the profile, toolchain, commands and dependency artifacts are in |
 | `build-cache.mjs` | when a build is a no-op, a restore or a rebuild; locks are broken only when their owner is dead; pruning is per package+profile |
-| `provenance.mjs` | a build stamp survives bundling, JSON escaping and base64 embedding; a stale embedded build is reported as stale, not missing |
+| `provenance.mjs` | a build stamp survives bundling, JSON escaping and base64 embedding; a superseded embed is reported as stale, a not-bundled one as absent (and absence never fails) |
+| `link-plan.mjs` | which local deps to link: never self, never one that was never published, never one whose checkout is older than the consumer's declared range |
 | `timings.mjs` | builds are grouped by repo, profile and outcome, never averaged across them |
 
 Two conventions those modules follow, both learned from bugs found here.

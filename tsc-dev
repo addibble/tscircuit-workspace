@@ -54,7 +54,10 @@
 #                                                               the bundle and compare it with what
 #                                                               this workspace has built. The only
 #                                                               check that can catch a stale bundle or
-#                                                               a wrong cache hit.
+#                                                               a wrong cache hit. Fails only on a
+#                                                               SUPERSEDED embed; a package that
+#                                                               simply is not bundled is reported,
+#                                                               not failed.
 #   ./tsc-dev prune-store [--keep N]  Delete old `-local.*` builds from the yalc store (default keep 2
 #                                     newest per package). Released versions are never touched.
 #   ./tsc-dev pr <repo> <branch>      Create an ISOLATED worktree off upstream main for a small
@@ -131,6 +134,9 @@
 #   ./tsc-dev gen-map [--check]       Regenerate MAP.md's group sections from workspace.json (or
 #                                     verify they are in sync, for CI / pre-commit)
 #   ./tsc-dev test [path...]          Run the workspace's own tests (bun test ./test/)
+#   ./tsc-dev unstamp [repo...]       Put a repo's version back to its released base, after a build
+#                                     was killed hard enough to skip the restore (kill -9). `doctor`
+#                                     reports these; they are never safe to commit.
 #   ./tsc-dev timings [--repo r]      What builds actually cost, from .run/timings.jsonl
 #   ./tsc-dev cache <sub>             The local content-addressed build cache:
 #                                       status              entries and size
@@ -491,10 +497,26 @@ cmd_install() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# NOTE on `|| return 1` below.
+#
+# These bodies run inside `with_dev_version`, which invokes them as `"$@" || rc=$?`
+# -- and a command in an `||` list disables `set -e` for its whole dynamic
+# extent. So a failing build here does NOT abort the script: without an explicit
+# check, execution falls through to `yalc publish`/`yalc push` and the PREVIOUS
+# dist is published under the new version, to every consumer, while the run
+# reports success.
+#
+# That is not hypothetical: it happened here. A runframe build failed on a
+# missing export, and the run still printed `✓ rebuilt: runframe` after pushing
+# the stale bundle to three consumers. Publishing a build that did not happen is
+# the worst possible failure mode for this tool, because every later symptom
+# points somewhere else.
+# ---------------------------------------------------------------------------
 do_build_publish() {
   local repo="$1"
   if has_build "$repo"; then
-    run_build "$repo"
+    run_build "$repo" || { echo "✗ build failed ($repo) — NOT publishing"; return 1; }
   else
     echo "ℹ $repo has no build script (source-only package) — publishing as-is"
   fi
@@ -735,6 +757,22 @@ playground_start() {
     start_daemon "watch-$repo" node "$ROOT/bin/watch-run.mjs" "$ROOT/$repo" "$repo" -- "$ROOT/tsc-dev" --profile "$profile" push "$repo"
   done < <(playground_watch_repos "$name")
   if [ "$dev" = 1 ]; then
+    # Make the chain consistent BEFORE anything is served.
+    #
+    # The watchers have just rebuilt their repos and pushed them; nothing has
+    # rebuilt the bundles that INLINE those repos, and the chain daemon's first
+    # pass is 45s of quiet away. Between those two points the viewer serves a
+    # bundle the graph already knows is stale -- an eval worker with a
+    # different core inlined than every other path resolves -- and that window
+    # is exactly one page load wide. A page loaded inside it keeps its worker
+    # until it is reloaded, so "restart the playground" was a way to end up
+    # debugging code that had already been superseded.
+    if [ "$sync_flag" != 0 ]; then
+      echo "  ⟳ making the bundling chain consistent before serving"
+      TSC_DEV_PROFILE="$profile" node "$ROOT/bin/chain-sync.mjs" "$ROOT" "$ROOT/tsc-dev" \
+        --once --quiet-for 8000 --interval 2000 2>&1 | sed 's/^/    /' || \
+        echo "    ⚠ chain sync failed — the viewer may serve a stale bundle (./tsc-dev playground sync $name)"
+    fi
     # The browser needs runframe's standalone bundle; `dev --local` serves the
     # locally-built one with the local eval worker injected.
     if [ ! -f "$ROOT/runframe/dist/standalone.min.js" ]; then
@@ -749,6 +787,9 @@ playground_start() {
       playground_free_port "$port" || return 1
       start_daemon "dev-$name" "$ROOT/tsc-dev" dev "$dir" --local --port "$port"
       echo "    → http://localhost:$port"
+      # Say what is actually being served, not what was built. The two have
+      # differed often enough here to be worth one second at startup.
+      playground_verify_serving "$port" "$name"
     fi
     # Watchers build one repo each; nothing rebuilds the bundles that INLINE
     # those repos, and the browser only ever runs the inlined copy. This closes
@@ -758,6 +799,28 @@ playground_start() {
     fi
   fi
   echo "  ./tsc-dev playground status $name"
+}
+
+# Ask the running dev server what it is serving, and compare it with what this
+# workspace has built. Every local build stamps its action key into its own
+# JavaScript, and those stamps survive inlining, base64 embedding and
+# serve-time injection -- so this is the only check that looks at what the
+# BROWSER will run rather than at what is on disk or in a lockfile.
+playground_verify_serving() {
+  local port="$1" name="${2:-}" waited=0 repos="eval,runframe"
+  # Ask about the repos this playground actually watches, plus the two the
+  # browser cannot run without. Deriving the list keeps it correct when the
+  # effort gains a repo, which is the same reason the watch set is derived.
+  if [ -n "$name" ]; then
+    local extra; extra="$(playground_watch_repos "$name" | tr '\n' ',' | sed 's/,$//')"
+    [ -n "$extra" ] && repos="eval,runframe,$extra"
+  fi
+  while [ "$waited" -lt 40 ]; do
+    curl -fsS -o /dev/null --max-time 2 "http://localhost:$port/standalone.min.js" 2>/dev/null && break
+    sleep 0.5; waited=$((waited + 1))
+  done
+  node "$ROOT/bin/verify-running.mjs" "$ROOT" "http://localhost:$port/standalone.min.js" \
+    --repos "$repos" 2>&1 | sed 's/^/    /' || true
 }
 
 playground_status() {
@@ -807,6 +870,13 @@ playground_status() {
   [ -n "$missing" ] && echo "  ⚠ no watcher for:$missing  — ./tsc-dev playground start $name"
   [ -n "$orphan" ] && echo "  ⚠ watching repos no longer in the set:$orphan  — ./tsc-dev playground restart $name"
   playground_report_stale "$name"
+  # What the server is serving, when there is a server. Staleness on disk and
+  # staleness in the browser are different questions: a page keeps the worker
+  # it loaded with, so the graph can be current while the tab is not.
+  if daemon_alive "dev-$name"; then
+    echo "  • serving:"
+    playground_verify_serving "$(playground_port "$name")" "$name"
+  fi
   return 0
 }
 
@@ -894,7 +964,9 @@ cmd_link() {
 
 do_build_push() {
   local repo="$1"
-  has_build "$repo" && run_build "$repo"
+  if has_build "$repo"; then
+    run_build "$repo" || { echo "✗ build failed ($repo) — NOT pushing (consumers keep the last good build)"; return 1; }
+  fi
   echo "▶ yalc push ($repo -> $(pkgname "$repo"))"
   (cd "$ROOT/$repo" && yalc push)
 }
@@ -946,36 +1018,29 @@ cmd_rebuild() {
     echo "=== rebuilding $repo ($(pkgname "$repo")) ==="
     # Link any dependency that is also a cloned repo in this workspace.
     #
-    # Skipped when the link is already current, which it usually is: the
-    # watchers `push` a rebuilt package straight into every consumer, so by the
-    # time a chain rebuild runs there is nothing to re-add. Each `yalc add`
-    # costs 5-9 seconds, and a repo like eval has 20+ local deps -- 3 minutes of
-    # relinking in front of a 13 second build.
-    local linked_ver store_ver
-    while IFS= read -r dep; do
-      [ -n "$dep" ] || continue
-      name="$(repo_for_pkg "$dep")"
-      [ -n "$name" ] || continue            # dep is not a local repo
-      [ "$name" = "$repo" ] && continue      # don't self-link
-      # Never published to the local store: `yalc add` would spend ~9 seconds
-      # to print "Could not find package in store, skipping". 17 of eval's 18
-      # local deps are in this state, which is most of a 3 minute rebuild.
-      [ -d "$YALC_STORE/packages/$dep" ] || continue
-      linked_ver="$(node -p "require('$ROOT/$repo/node_modules/$dep/package.json').version" 2>/dev/null || echo "")"
-      store_ver="$(node -p "require('$ROOT/$name/package.json').version" 2>/dev/null || echo "")"
-      # A stamped local build carries the store version as its prefix; anything
-      # else (an npm copy, a missing link, an older stamp) needs the add.
-      case "$linked_ver" in
-        "$store_ver"-local.*|"$store_ver")
-          continue ;;
+    # The decision is bin/link-plan.mjs, in one node process for the whole repo
+    # rather than two per dependency (the shape of the defect that once cost
+    # three minutes per rebuild), and it carries a rule bash had nowhere to put:
+    # a local checkout OLDER than what this consumer declares is refused rather
+    # than linked. Linking one replaced a working npm copy with an older build
+    # and failed the build on a missing export, with every version in sight
+    # looking plausible.
+    local action name reason
+    while IFS=$'\t' read -r action name reason; do
+      [ -n "$name" ] || continue
+      case "$action" in
+        add)
+          echo "  ↳ yalc add $name (local)"
+          (cd "$ROOT/$repo" && yalc add "$name" >/dev/null) ;;
+        refuse)
+          echo "  ⚠ NOT linking $name: $reason" ;;
       esac
-      echo "  ↳ yalc add $dep (local)"
-      (cd "$ROOT/$repo" && yalc add "$dep" >/dev/null)
-    done < <(dep_names "$repo")
+    done < <(node "$ROOT/bin/link-plan.mjs" "$ROOT" "$repo" "$YALC_STORE")
     # Build (re-inlines any linked deps) then push to downstream consumers.
     # Stamping starts here, AFTER the `yalc add` loop above: the stamp restores
     # package.json from a backup, which would otherwise revert those links.
-    with_dev_version "$repo" do_rebuild_one "$repo"
+    with_dev_version "$repo" do_rebuild_one "$repo" \
+      || die "rebuild stopped at '$repo' — nothing further was built or pushed"
     # A runframe build wipes dist/, taking the injected local bundle with it.
     # Regenerate it here rather than at dev-server startup, or `dev --local`
     # falls back to the published runframe and the browser silently stops
@@ -990,7 +1055,7 @@ cmd_rebuild() {
 do_rebuild_one() {
   local repo="$1"
   if has_build "$repo"; then
-    run_build "$repo"
+    run_build "$repo" || { echo "  ✗ build failed ($repo) — NOT pushing"; return 1; }
   fi
   echo "  ↳ yalc push"; (cd "$ROOT/$repo" && yalc push)
 }
@@ -1035,6 +1100,56 @@ declarations_note() {
   esac
 }
 
+# A stamp left behind in a repo's package.json.
+#
+# `with_dev_version` restores the file on EXIT/INT/TERM, which covers a failed
+# build and Ctrl-C but NOT `kill -9` (a daemon stopped hard mid-push, an OOM).
+# When it does leak, nothing fails: builds still work, because the next stamp
+# strips the old one. It just sits in `git status` looking like a deliberate
+# version bump — the exact thing this workspace forbids — and it makes every
+# link to that repo look stale. Two repos here had carried one for two days.
+report_leftover_stamps() {
+  local found
+  found="$(node -e '
+import fs from "node:fs"
+import path from "node:path"
+const root = process.argv[1]
+for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, entry.name, "package.json"), "utf8"))
+    if (/-local\./.test(String(pkg.version ?? ""))) console.log(`${entry.name}\t${pkg.version}`)
+  } catch {}
+}' "$ROOT")"
+  [ -n "$found" ] || return 0
+  echo "• leftover local stamps in package.json (an interrupted build; never commit these)"
+  printf '%s\n' "$found" | while IFS=$'\t' read -r repo version; do
+    printf '    ⚠ %-28s %s — fix: ./tsc-dev unstamp %s\n' "$repo" "$version" "$repo"
+  done
+  return 1
+}
+
+# Put a repo's version back to its released base. Idempotent, and byte-exact
+# apart from that one string.
+cmd_unstamp() {
+  local repos=("$@") repo
+  if [ ${#repos[@]} -eq 0 ]; then
+    repos=(); for d in "$ROOT"/*/; do [ -d "$d/.git" ] && repos+=("$(basename "$d")"); done
+  fi
+  for repo in "${repos[@]}"; do
+    have "$repo" || die "repo '$repo' is not cloned"
+    node -e '
+import fs from "node:fs"
+const f = process.argv[1]
+const before = fs.readFileSync(f, "utf8")
+const after = before.replace(/("version"\s*:\s*")([^"]*?)-local\.[^"]*"/, `$1$2"`)
+if (after !== before) {
+  fs.writeFileSync(f, after)
+  console.log(`  ✓ ${process.argv[2]} -> ${JSON.parse(after).version}`)
+}' "$ROOT/$repo/package.json" "$repo"
+  done
+}
+
 # Audit yalc links from the CONSUMER side — the three ways a link goes wrong:
 #   1. the linked build claims a version npm can also publish (the collision this
 #      whole stamping scheme exists to prevent);
@@ -1061,6 +1176,7 @@ cmd_doctor() {
   if [ ${#targets[@]} -eq 0 ]; then
     while IFS= read -r t; do [ -n "$t" ] && [ -d "$t" ] && targets+=("$t"); done < <(yalc_installations)
   fi
+  report_leftover_stamps || problems=$((problems + 1))
   [ ${#targets[@]} -gt 0 ] || { echo "no yalc-linked projects found"; return 0; }
   # package name -> workspace repo, built once (a node start per repo is slow to
   # repeat for every link).
@@ -2169,6 +2285,7 @@ main() {
     push)    cmd_push "$@" ;;
     unlink)  cmd_unlink "$@" ;;
     doctor)  cmd_doctor "$@" ;;
+    unstamp) cmd_unstamp "$@" ;;
     prune-store) cmd_prune_store "$@" ;;
     pr)       cmd_pr "$@" ;;
     pr-check) cmd_pr_check "$@" ;;

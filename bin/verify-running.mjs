@@ -34,19 +34,30 @@ export const expectedFromWorkspace = (root, repos) => {
   return out
 }
 
-export const formatVerification = (results) => {
-  const icon = { ok: "✓", stale: "✗", missing: "✗", unknown: "·" }
-  return results.map((r) => {
+export const formatVerification = (results) =>
+  results.map((r) => {
     if (r.status === "ok") return `  ✓ ${r.repo.padEnd(22)} ${r.key.slice(0, 12)} (${r.profile})`
     if (r.status === "stale")
       return `  ✗ ${r.repo.padEnd(22)} serving ${r.actual.slice(0, 12)}, workspace has ${r.expected.slice(0, 12)} — rebuild the chain that inlines it`
-    if (r.status === "missing")
-      return `  ✗ ${r.repo.padEnd(22)} not present in the served artifact at all (expected ${r.expected.slice(0, 12)})`
-    return `  ${icon[r.status]} ${r.repo.padEnd(22)} embedded but not built here (${r.actual.slice(0, 12)})`
+    if (r.status === "absent")
+      return `  · ${r.repo.padEnd(22)} not embedded here (external, or not part of this bundle)`
+    return `  · ${r.repo.padEnd(22)} embedded but not built here (${r.actual.slice(0, 12)})`
   })
-}
 
-export const isClean = (results) => results.every((r) => r.status === "ok" || r.status === "unknown")
+/**
+ * Only a STALE embed is a failure: it proves the artifact contains a build that
+ * has been superseded. An absent one proves nothing — the bundling graph is a
+ * superset, and `cli` is never in the browser bundle at all.
+ *
+ * The one exception is an artifact with none of the expected builds in it,
+ * which is the "the dev server fell back to the CDN bundle" case.
+ */
+export const isClean = (results) => {
+  if (results.some((r) => r.status === "stale")) return false
+  const expectedCount = results.filter((r) => r.status !== "unknown").length
+  const present = results.filter((r) => r.status === "ok").length
+  return expectedCount === 0 || present > 0
+}
 
 if (isMain(import.meta.url)) {
   const argv = process.argv.slice(2)
