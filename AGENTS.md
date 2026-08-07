@@ -363,7 +363,6 @@ cost this workspace two debugging sessions.
 stamps its identity into its own JavaScript as a legal comment
 (`/*!__TSC_DEV_BUILD__ {…}`), and that stamp survives being inlined by tsup,
 base64-embedded into runframe's standalone, and spliced in at serve time. So:
-
 ```bash
 ./tsc-dev doctor --verify-running                  # ask the dev server what it is serving
 node bin/verify-running.mjs . runframe/dist/standalone.local.min.js --repos eval,runframe,core
@@ -454,6 +453,29 @@ hours later:
 | a rebuild "succeeds" but nothing changes | **the build failed and the previous `dist` was published anyway** — `set -e` is disabled inside `with_dev_version`'s `\|\|` list, so a failed build fell through to `yalc push` | the build result is checked explicitly; a failed build publishes nothing and stops the chain |
 | a consumer's build breaks on a missing export | a local checkout OLDER than the consumer's declared range got linked over a working npm copy | `bin/link-plan.mjs` refuses the link and says so |
 | `git status` shows a version bump you did not make | a build was killed with `-9`, skipping the stamp restore | `doctor` reports it; `./tsc-dev unstamp <repo>` fixes it |
+
+**Before blaming a build, check the URL.** The viewer pins the selected circuit
+in the tab's hash — `#file=…&main_component=…` — and writes it back with
+`history.replaceState`, so it outlives reloads, dev-server restarts and
+`playground restart`. The dev server uploads the project's **node_modules** to
+the browser (that is how imports resolve there), which means every dependency
+source file is addressable as a `main_component`, and runframe will dutifully
+render whatever that file's default export returns.
+
+One real instance, which cost most of a session: a hash left pointing at
+`node_modules/zod/src/v4/locales/th.ts`, whose default export is
+`() => ({ localeError })`. The page reported
+
+```
+Execution Error: Error evaluating "entrypoint.tsx": Objects are not valid as a
+React child (found: object with keys {localeError})
+```
+
+which reads exactly like a version mismatch deep in the bundle — and survived a
+playground restart, because the hash did. `http://localhost:3020/` with no hash
+rendered the board fine. **Load the bare URL before investigating anything
+else**; it takes a second and it separates "my build is wrong" from "I am
+rendering the wrong file".
 
 ## Local build versions (never hand-edit `version`)
 

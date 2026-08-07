@@ -562,6 +562,27 @@ What the running viewer picks up, and what it does not:
 That asymmetry is inherent: the browser runs eval inside runframe's prebuilt
 bundle, so package changes reach it only when that bundle is re-inlined.
 
+### The tab's URL pins which file is rendered, and outlives everything
+
+The viewer records the selected circuit in the hash (`#file=…&main_component=…`)
+and rewrites it with `history.replaceState`, so it survives reloads, dev-server
+restarts and `playground restart`. The dev server also uploads the project's
+**node_modules** to the browser — that is how imports resolve there — so every
+dependency source file is addressable as a `main_component`, and runframe will
+render whatever that file's default export returns.
+
+A hash left pointing at `node_modules/zod/src/v4/locales/th.ts` (default export:
+`() => ({ localeError })`) produces
+
+```
+Execution Error: Error evaluating "entrypoint.tsx": Objects are not valid as a
+React child (found: object with keys {localeError})
+```
+
+which looks exactly like a version mismatch deep in the bundle, and comes back
+after every restart because the hash does. Open `http://localhost:3020/` with no
+hash before investigating anything else.
+
 ### Bind the playground to an effort, not to a list of repos
 
 An effort already names the repos a change spans, so `--effort <name>` derives
