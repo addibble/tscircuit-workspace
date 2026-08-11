@@ -1,6 +1,6 @@
 {
   "$comment": "Your personal workspace layer. Deep-merged over workspace.json, and it wins. Versioned on an orphan branch pushed only to your fork \u2014 never to the shared repo's main. Put anything here whose value differs between developers.",
-  "defaultForkEffort": "parametric-enclosures",
+  "defaultForkEffort": "merge-fdm-enclosure",
   "forkEfforts": {
     "parametric-enclosures": {
       "description": "Repos carrying the parametric-enclosure patch set, in release order (dependencies first, docs last). Downstream rebuild-only repos (eval, runframe) are excluded - they carry no patch branch. jscad-electronics was dropped: its right-angle pin fix (tscircuit/jscad-electronics#318) is independent of this effort and not required by it. Override the effort with SYNC_FORK_EFFORT, or one branch for every repo with SYNC_FORK_BRANCH.",
@@ -20,12 +20,17 @@
         "rfc",
         "skill"
       ]
+    },
+    "merge-fdm-enclosure": {
+      "description": "Focused migration after Props 0.0.619 and create-fdm-enclosure 0.0.4 published. Core consumes the new solver while retaining the existing synthetic cad_component Circuit JSON representation. Circuit JSON, renderer and CLI migrations are deliberately excluded until the later typed per-part stage.",
+      "defaultBranch": "feat/staged-fdm-enclosure-consumer",
+      "repos": ["core"]
     }
   },
   "playgrounds": {
     "tsc-playground": {
       "path": "/Users/drew/src/tsc-playground",
-      "effort": "parametric-enclosures"
+      "effort": "merge-fdm-enclosure"
     }
   }
 }
