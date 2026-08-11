@@ -22,9 +22,12 @@
       ]
     },
     "merge-fdm-enclosure": {
-      "description": "Focused migration after Props 0.0.619 and create-fdm-enclosure 0.0.4 published. Core consumes the new solver while retaining the existing synthetic cad_component Circuit JSON representation. Circuit JSON, renderer and CLI migrations are deliberately excluded until the later typed per-part stage.",
+      "description": "Focused migration after Props 0.0.619 and create-fdm-enclosure 0.0.4 published. Core consumes the new solver while retaining the existing synthetic cad_component Circuit JSON representation; 3d-viewer adds appearance controls for that single compatibility entity. Typed Circuit JSON, per-part renderer and CLI migrations are deliberately excluded.",
       "defaultBranch": "feat/staged-fdm-enclosure-consumer",
-      "repos": ["core"]
+      "branchOverrides": {
+        "3d-viewer": "feat/legacy-enclosure-appearance"
+      },
+      "repos": ["core", "3d-viewer"]
     }
   },
   "playgrounds": {
