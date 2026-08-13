@@ -53,6 +53,32 @@ export const minimumVersionOf = (spec) => {
 }
 
 /**
+ * Merge manifest dependency sections without letting a peer wildcard erase a
+ * concrete runtime/dev minimum. When several sections specify versions, retain
+ * the strictest minimum: local linking must satisfy every declared role.
+ */
+export const mergeDependencySpecs = (...groups) => {
+  const merged = {}
+  for (const group of groups) {
+    for (const [pkg, spec] of Object.entries(group ?? {})) {
+      if (!(pkg in merged)) {
+        merged[pkg] = spec
+        continue
+      }
+      const currentMinimum = minimumVersionOf(merged[pkg])
+      const nextMinimum = minimumVersionOf(spec)
+      if (
+        nextMinimum &&
+        (!currentMinimum || compareVersions(nextMinimum, currentMinimum) > 0)
+      ) {
+        merged[pkg] = spec
+      }
+    }
+  }
+  return merged
+}
+
+/**
  * @param deps           { name: declaredSpec } from the consumer's package.json
  * @param localPackages  { name: { repo, version } } workspace packages
  * @param inStore        (name) => boolean — has this ever been published locally?
@@ -120,7 +146,12 @@ if (isMain(import.meta.url)) {
     const p = readJson(path.join(root, entry.name, "package.json"))
     if (p?.name) localPackages[p.name] = { repo: entry.name, version: String(p.version ?? "") }
   }
-  const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies }
+  const deps = mergeDependencySpecs(
+    pkg.peerDependencies,
+    pkg.optionalDependencies,
+    pkg.dependencies,
+    pkg.devDependencies,
+  )
   const plan = planLinks({
     deps,
     localPackages,

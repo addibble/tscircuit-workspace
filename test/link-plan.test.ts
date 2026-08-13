@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test"
-import { compareVersions, minimumVersionOf, planLinks } from "../bin/link-plan.mjs"
+import {
+  compareVersions,
+  mergeDependencySpecs,
+  minimumVersionOf,
+  planLinks,
+} from "../bin/link-plan.mjs"
 
 const base = {
   repo: "runframe",
@@ -74,6 +79,22 @@ test("specs with no expressible minimum do not block a link", () => {
     expect(minimumVersionOf(spec)).toBe(null)
     expect(planLinks({ ...base, deps: { "circuit-to-svg": spec } })[0].action).toBe("add")
   }
+})
+
+test("a peer wildcard cannot erase a concrete dependency minimum", () => {
+  expect(
+    mergeDependencySpecs(
+      { "circuit-json": "*" },
+      { "circuit-json": "^0.0.465" },
+    ),
+  ).toEqual({ "circuit-json": "^0.0.465" })
+
+  expect(
+    mergeDependencySpecs(
+      { "circuit-json": "^0.0.460" },
+      { "circuit-json": "^0.0.465" },
+    ),
+  ).toEqual({ "circuit-json": "^0.0.465" })
 })
 
 test("versions compare numerically, not lexically", () => {
