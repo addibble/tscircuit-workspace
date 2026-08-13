@@ -77,6 +77,16 @@
 #                                     tscircuit/<repo>. Always a draft, and never marked ready —
 #                                     that is a manual click. --url-only pushes and prints the
 #                                     compare URL without creating anything.
+#   ./tsc-dev pr-stack <sub> [name]   Prepare a configured cross-repo merge stack. Source branches
+#                                     stay on your fork/local checkout; publish maps them onto
+#                                     tscircuit-owned upstream branches using force-with-lease:
+#                                       plan               validate and print the dependency DAG
+#                                       status             branch/PR/check/prerequisite status
+#                                       publish [--dry-run] [--layer id] [--no-create]
+#                                                          push upstream branches and create/update
+#                                                          draft PRs against same-repo stack bases;
+#                                                          cross-repo dependsOn edges become managed
+#                                                          prerequisite links in each PR body
 #   ./tsc-dev local <sub>             Manage YOUR config layer — a worktree in .local/ on an orphan
 #                                     branch (user/<login>) that is pushed only to your fork:
 #                                       init [--remote <url>]  create it (migrating user-specific keys
@@ -94,6 +104,11 @@
 #                                       show <owner>           their locked environment
 #                                       diff <owner>           how yours differs from theirs
 #                                       adopt <owner> --into <dir> | --here    reproduce it
+#
+# Merge stacks live in the LOCAL config layer (`defaultMergeStack`, `mergeStacks`):
+# they describe one developer's source branches and temporary upstream merge
+# branches. A layer has repo/sourceBranch/upstreamBranch, optional same-repo
+# baseLayer, and cross-repo dependsOn edges.
 #
 # CONFIG LAYERS: workspace.json is SHARED (clone groups, the bundling graph, the
 # default clone set — the same in everyone's copy, committed to main).
@@ -1747,6 +1762,217 @@ cmd_pr_push() {
 }
 
 # ---------------------------------------------------------------------------
+# Cross-repository merge stacks
+#
+# Local/fork branches remain the development source of truth. Publishing copies
+# their committed tips to tscircuit-owned temporary branches with explicit
+# leases, then opens/updates draft PRs. Same-repo baseLayer edges become GitHub
+# PR bases; cross-repo dependsOn edges are merge prerequisites recorded in the
+# managed PR body block.
+# ---------------------------------------------------------------------------
+
+pr_stack_plan_file() {
+  local name="$1" out="$2"
+  node "$ROOT/bin/pr-stack.mjs" plan "$ROOT" "$name" > "$out" \
+    || die "invalid merge stack${name:+ '$name'}"
+}
+
+pr_stack_source_ref() {
+  local dir="$1" branch="$2"
+  if git -C "$dir" show-ref --verify --quiet "refs/heads/$branch"; then
+    echo "refs/heads/$branch"
+  elif git -C "$dir" show-ref --verify --quiet "refs/remotes/fork/$branch"; then
+    echo "refs/remotes/fork/$branch"
+  elif git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    echo "refs/remotes/origin/$branch"
+  else
+    return 1
+  fi
+}
+
+pr_stack_plan_field() {
+  local plan="$1" field="$2"
+  node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const v=p[process.argv[2]];if(v!=null)process.stdout.write(String(v))' "$plan" "$field"
+}
+
+pr_stack_json_field() {
+  local plan="$1" id="$2" field="$3"
+  node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const l=p.layers.find(x=>x.id===process.argv[2]);const v=l?.[process.argv[3]];if(Array.isArray(v))process.stdout.write(v.join(","));else if(v!=null)process.stdout.write(String(v))' "$plan" "$id" "$field"
+}
+
+pr_stack_dependency_block() {
+  local plan="$1" id="$2" owner="$3" deps dep dep_repo dep_branch info number url state merged branch_url
+  deps="$(pr_stack_json_field "$plan" "$id" dependencies)"
+  if [ -z "$deps" ]; then echo "Prerequisites: none"; return 0; fi
+  echo "Prerequisites:"
+  IFS=',' read -r -a dep_list <<< "$deps"
+  for dep in "${dep_list[@]}"; do
+    dep_repo="$(pr_stack_json_field "$plan" "$dep" repo)"
+    dep_branch="$(pr_stack_json_field "$plan" "$dep" upstreamBranch)"
+    info="$(gh pr list -R "$owner/$dep_repo" --head "$dep_branch" --state all --limit 1 \
+      --json number,url,state,mergedAt --jq '.[0] // {}' 2>/dev/null || echo '{}')"
+    number="$(printf '%s' "$info" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).number||""))}catch{}})')"
+    url="$(printf '%s' "$info" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).url||"")}catch{}})')"
+    state="$(printf '%s' "$info" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.mergedAt?"merged":(j.state||"branch only").toLowerCase())}catch{}})')"
+    merged="$(printf '%s' "$info" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).mergedAt?"1":"0")}catch{}})')"
+    branch_url="https://github.com/$owner/$dep_repo/tree/$dep_branch"
+    [ -n "$url" ] || url="$branch_url"
+    [ "$merged" = 1 ] && printf '%s\n' "- [x] [$dep]($url) — merged" \
+      || printf '%s\n' "- [ ] [$dep]($url) — ${state:-branch only}"
+  done
+}
+
+pr_stack_managed_body() {
+  local plan="$1" id="$2" current="$3" base_body="$4" out="$5"
+  local name repo branch base block tmp
+  name="$(pr_stack_plan_field "$plan" name)"
+  repo="$(pr_stack_json_field "$plan" "$id" repo)"
+  branch="$(pr_stack_json_field "$plan" "$id" upstreamBranch)"
+  base="$(pr_stack_json_field "$plan" "$id" baseBranch)"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-stack-block.XXXXXX")"
+  {
+    echo "## Merge stack"
+    echo
+    echo "Stack: \`$name\` · layer \`$id\`"
+    echo "Upstream branch: \`$repo:$branch\`"
+    echo "Base: \`$base\`"
+    echo
+    pr_stack_dependency_block "$plan" "$id" "$(pr_stack_plan_field "$plan" upstreamOwner)"
+    echo
+    echo 'Managed by `./tsc-dev pr-stack`; edit prose above this block freely.'
+  } > "$tmp"
+  node --input-type=module - "$current" "$base_body" "$tmp" "$out" <<'NODE'
+import fs from "node:fs"
+import { upsertManagedBlock } from "./bin/pr-stack.mjs"
+const [, , current, fallback, blockFile, outFile] = process.argv
+const body = current || fallback || ""
+fs.writeFileSync(outFile, upsertManagedBlock(body, fs.readFileSync(blockFile, "utf8")) + "\n")
+NODE
+  rm -f "$tmp"
+}
+
+cmd_pr_stack_plan() {
+  local name="$1" tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-stack-plan.XXXXXX")"
+  pr_stack_plan_file "$name" "$tmp"
+  node - "$tmp" <<'NODE'
+const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));console.log(`• ${p.name}${p.description?` — ${p.description}`:""}`)
+for(const l of p.layers) console.log(`  ${String(l.index).padStart(2)}  ${l.id.padEnd(28)} ${l.repo}:${l.sourceBranch}  →  ${p.upstreamOwner}/${l.repo}:${l.upstreamBranch}  (base ${l.baseBranch})${l.dependencies.length?`  needs ${l.dependencies.join(", ")}`:""}`)
+NODE
+  rm -f "$tmp"
+}
+
+cmd_pr_stack_status() {
+  local name="$1" tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-stack-plan.XXXXXX")"
+  pr_stack_plan_file "$name" "$tmp"
+  local owner; owner="$(pr_stack_plan_field "$tmp" upstreamOwner)"
+  echo "• stack $(pr_stack_plan_field "$tmp" name)"
+  local id repo source upstream base deps src_ref src_sha upstream_sha pr checks blocked=0 dep dep_repo dep_branch dep_state
+  while IFS=$'\t' read -r id repo source upstream base source_base deps title; do
+    [ "$source_base" = "-" ] && source_base=""; [ "$deps" = "-" ] && deps=""; [ "$title" = "-" ] && title=""
+    have "$repo" || { echo "  ✗ $id: repo $repo not cloned"; continue; }
+    git -C "$ROOT/$repo" fetch origin --quiet 2>/dev/null || true
+    src_ref="$(pr_stack_source_ref "$ROOT/$repo" "$source" 2>/dev/null || true)"
+    src_sha="$([ -n "$src_ref" ] && git -C "$ROOT/$repo" rev-parse --short "$src_ref" || echo missing)"
+    upstream_sha="$(git -C "$ROOT/$repo" rev-parse --short "origin/$upstream" 2>/dev/null || echo missing)"
+    pr="$(gh pr list -R "$owner/$repo" --head "$upstream" --state all --limit 1 --json number,url,state,isDraft,mergedAt \
+      --jq '.[0] | if .mergedAt then "merged " + .url elif .url then ((if .isDraft then "draft " else "open " end) + .url) else "" end' 2>/dev/null || true)"
+    checks=""
+    if [ -n "$pr" ] && [ "${pr%% *}" != merged ]; then
+      checks="$(gh pr checks "${pr##* }" --json state --jq '[.[]|.state] | if any(.=="FAILURE" or .=="ERROR") then "checks failing" elif any(.=="PENDING" or .=="QUEUED" or .=="IN_PROGRESS") then "checks pending" else "checks passing" end' 2>/dev/null || true)"
+    fi
+    blocked=0
+    if [ -n "$deps" ]; then
+      IFS=',' read -r -a dep_list <<< "$deps"
+      for dep in "${dep_list[@]}"; do
+        dep_repo="$(pr_stack_json_field "$tmp" "$dep" repo)"; dep_branch="$(pr_stack_json_field "$tmp" "$dep" upstreamBranch)"
+        dep_state="$(gh pr list -R "$owner/$dep_repo" --head "$dep_branch" --state all --limit 1 --json mergedAt --jq '.[0].mergedAt // ""' 2>/dev/null || true)"
+        [ -n "$dep_state" ] || blocked=$((blocked + 1))
+      done
+    fi
+    printf '  %-28s src %-8s upstream %-8s  %s%s%s\n' "$id" "$src_sha" "$upstream_sha" "${pr:-no PR}" "${checks:+ · $checks}" "$([ "$blocked" -gt 0 ] && echo " · blocked by $blocked" || true)"
+  done < <(node "$ROOT/bin/pr-stack.mjs" plan "$ROOT" "$(pr_stack_plan_field "$tmp" name)" --tsv)
+  rm -f "$tmp"
+}
+
+cmd_pr_stack_publish() {
+  local name="" layer_only="" dry=0 no_create=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --no-create) no_create=1; shift ;;
+      --layer) layer_only="${2:?--layer needs an id}"; shift 2 ;;
+      --ready|--ready-for-review|--no-draft) die "refusing: Ready for review is a manual action" ;;
+      -*) die "unknown flag '$1'" ;;
+      *) [ -z "$name" ] || die "unexpected argument '$1'"; name="$1"; shift ;;
+    esac
+  done
+  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-stack-plan.XXXXXX")"
+  pr_stack_plan_file "$name" "$tmp"
+  local owner stack_name; owner="$(pr_stack_plan_field "$tmp" upstreamOwner)"; stack_name="$(pr_stack_plan_field "$tmp" name)"
+  local id repo source upstream base source_base deps title dir source_ref source_base_ref expected push_arg existing number current_body configured_body commit_body body_file
+  while IFS=$'\t' read -r id repo source upstream base source_base deps title; do
+    [ "$source_base" = "-" ] && source_base=""; [ "$deps" = "-" ] && deps=""; [ "$title" = "-" ] && title=""
+    [ -z "$layer_only" ] || [ "$id" = "$layer_only" ] || continue
+    have "$repo" || die "$id: repo '$repo' is not cloned"
+    repo_push_access "$repo" || die "$id: no push access to $owner/$repo"
+    dir="$ROOT/$repo"
+    git -C "$dir" fetch origin --prune --quiet || die "$id: fetch origin failed"
+    git -C "$dir" remote | grep -qx fork && git -C "$dir" fetch fork --prune --quiet || true
+    source_ref="$(pr_stack_source_ref "$dir" "$source" 2>/dev/null || true)"
+    [ -n "$source_ref" ] || die "$id: source branch '$source' not found locally, on fork, or on origin"
+    if [ -n "$source_base" ]; then
+      source_base_ref="$(pr_stack_source_ref "$dir" "$source_base" 2>/dev/null || true)"
+      [ -n "$source_base_ref" ] || die "$id: source base branch '$source_base' not found"
+      git -C "$dir" merge-base --is-ancestor "$source_base_ref" "$source_ref" \
+        || die "$id: $source is not based on $source_base (rebase the source stack first)"
+    fi
+    if [ "$base" != main ] && ! git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$base"; then
+      [ "$dry" = 1 ] || die "$id: upstream base branch '$base' does not exist yet (publish its layer first)"
+    fi
+    expected="$(git -C "$dir" rev-parse --verify "refs/remotes/origin/$upstream" 2>/dev/null || true)"
+    if [ -n "$expected" ]; then push_arg="--force-with-lease=refs/heads/$upstream:$expected"; else push_arg="--force-with-lease=refs/heads/$upstream:"; fi
+    if git -C "$dir" cat-file -e "$source_ref:package.json" 2>/dev/null \
+      && git -C "$dir" show "$source_ref:package.json" | grep -q '"file:\.yalc/'; then
+      die "$id: committed package.json on $source contains yalc links"
+    fi
+    echo "=== $id ($repo) ==="
+    echo "  ↳ $source_ref ($(git -C "$dir" rev-parse --short "$source_ref")) → $owner/$repo:$upstream  base $base"
+    if [ "$dry" = 1 ]; then
+      echo "  (dry run) git push $push_arg origin $source_ref:refs/heads/$upstream"
+      continue
+    fi
+    git -C "$dir" push "$push_arg" origin "$source_ref:refs/heads/$upstream" \
+      || die "$id: upstream push failed (branch changed since fetch; inspect before retrying)"
+    git -C "$dir" fetch origin "$upstream" --quiet || true
+    [ "$no_create" = 0 ] || continue
+    existing="$(gh pr list -R "$owner/$repo" --head "$upstream" --state open --limit 1 --json number --jq '.[0].number // ""')"
+    configured_body="$(ws "w.mergeStacks[args[0]].layers[args[1]].body||''" "$stack_name" "$id")"
+    commit_body="$(git -C "$dir" log -1 --format=%B "$source_ref")"
+    title="${title:-$(git -C "$dir" log -1 --format=%s "$source_ref")}"; body_file="$(mktemp "${TMPDIR:-/tmp}/tsc-dev-stack-body.XXXXXX")"
+    current_body=""; [ -z "$existing" ] || current_body="$(gh pr view "$existing" -R "$owner/$repo" --json body --jq .body)"
+    pr_stack_managed_body "$tmp" "$id" "$current_body" "${configured_body:-$commit_body}" "$body_file"
+    if [ -n "$existing" ]; then
+      gh pr edit "$existing" -R "$owner/$repo" --base "$base" --title "$title" --body-file "$body_file"
+      echo "  ✓ updated https://github.com/$owner/$repo/pull/$existing"
+    else
+      gh pr create -R "$owner/$repo" --head "$upstream" --base "$base" --draft --title "$title" --body-file "$body_file"
+    fi
+    rm -f "$body_file"
+  done < <(node "$ROOT/bin/pr-stack.mjs" plan "$ROOT" "$stack_name" --tsv)
+  rm -f "$tmp"
+}
+
+cmd_pr_stack() {
+  local sub="${1:-status}"; shift || true
+  case "$sub" in
+    plan) cmd_pr_stack_plan "${1:-}" ;;
+    status) cmd_pr_stack_status "${1:-}" ;;
+    publish) cmd_pr_stack_publish "$@" ;;
+    *) die "usage: pr-stack <plan|status|publish> [stack] [--dry-run] [--layer id] [--no-create]" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # The user config layer, and peer environments
 #
 # workspace.json is SHARED: clone groups, the bundling graph, the default clone
@@ -2170,7 +2396,7 @@ cmd_sync_forks() {
   command -v gh >/dev/null 2>&1 || die "sync-forks needs the GitHub CLI (gh)"
   local repos=("$@"); [ ${#repos[@]} -eq 0 ] && { repos=(); while IFS= read -r t; do [ -n "$t" ] && repos+=("$t"); done < <(sync_fork_repos); }
   local repo dir fork_url fork_slug out branch branch_ref sync_root sync_dir conflict_files
-  local local_ref fork_ref branch_src diverged new_head fork_fetch_ok
+  local local_ref fork_ref branch_src diverged new_head fork_fetch_ok stack_match stack_base rebase_target
   for repo in "${repos[@]}"; do
     have "$repo" || { echo "⚠ $repo: not cloned — skipping"; continue; }
     branch="${SYNC_FORK_BRANCH:-$(sync_fork_branch_for "$repo")}"
@@ -2212,6 +2438,17 @@ cmd_sync_forks() {
       fi
     fi
 
+    stack_match="$(node "$ROOT/bin/pr-stack.mjs" source-base "$ROOT" "$repo" "$branch" 2>/dev/null || true)"
+    stack_base="$(printf '%s' "$stack_match" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).base||"")}catch{}})' 2>/dev/null || true)"
+    rebase_target="origin/main"
+    if [ -n "$stack_base" ]; then
+      rebase_target="$(pr_stack_source_ref "$dir" "$stack_base" 2>/dev/null || true)"
+      [ -n "$rebase_target" ] || {
+        echo "  ✗ merge-stack base '$stack_base' not found — refusing to flatten $branch onto main"
+        diverged=1
+      }
+    fi
+
     if [ "$diverged" -eq 1 ]; then
       echo "  ✗ local $branch and fork/$branch have diverged — refusing to guess."
       echo "      reconcile, then re-run:  git -C $dir rebase fork/$branch"
@@ -2220,8 +2457,8 @@ cmd_sync_forks() {
       sync_root="$(mktemp -d "${TMPDIR:-/tmp}/tsc-dev-sync-${repo}.XXXXXX")"
       sync_dir="$sync_root/worktree"
       if git -C "$dir" worktree add --detach "$sync_dir" "$branch_ref" --quiet; then
-        if out="$(git -C "$sync_dir" rebase origin/main 2>&1)"; then
-          echo "  ↳ rebased onto origin/main ($(git -C "$dir" rev-parse --short origin/main))"
+        if out="$(git -C "$sync_dir" rebase "$rebase_target" 2>&1)"; then
+          echo "  ↳ rebased onto $rebase_target ($(git -C "$dir" rev-parse --short "$rebase_target"))"
           if out="$(git -C "$sync_dir" push --force-with-lease fork "HEAD:refs/heads/$branch" 2>&1)"; then
             echo "  ↳ push fork: $(printf '%s' "$out" | tail -1 | sed 's/^[[:space:]]*//')"
             new_head="$(git -C "$sync_dir" rev-parse HEAD)"
@@ -2291,6 +2528,7 @@ main() {
     pr-check) cmd_pr_check "$@" ;;
     pr-push)  cmd_pr_push "$@" ;;
     pr-link)  cmd_pr_link "$@" ;;
+    pr-stack) cmd_pr_stack "$@" ;;
     fork)     cmd_fork "$@" ;;
     local)    cmd_local "$@" ;;
     config)   cmd_config "$@" ;;

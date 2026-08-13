@@ -32,7 +32,12 @@ export const GLOBAL_FILE = "workspace.json"
 export const LOCAL_FILE = path.join(".local", "workspace.local.json")
 
 // Keys that describe one developer's current work rather than the project.
-export const USER_KEYS = ["defaultForkEffort", "forkEfforts"]
+export const USER_KEYS = [
+  "defaultForkEffort",
+  "forkEfforts",
+  "defaultMergeStack",
+  "mergeStacks",
+]
 
 const readJson = (file) => {
   try {
@@ -120,6 +125,29 @@ const seed = (root, outFile) => {
         defaultBranch: "feat/my-feature",
         branchOverrides: {},
         repos: [],
+      },
+    }
+  }
+  if (!("mergeStacks" in out)) {
+    out.defaultMergeStack = "example"
+    out.mergeStacks = {
+      example: {
+        description:
+          "Source branches stay on your fork; publish maps them to tscircuit-owned PR branches.",
+        upstreamOwner: "tscircuit",
+        layers: {
+          props: {
+            repo: "props",
+            sourceBranch: "feat/my-feature-props",
+            upstreamBranch: "feat/my-feature/01-props",
+          },
+          core: {
+            repo: "core",
+            sourceBranch: "feat/my-feature-core",
+            upstreamBranch: "feat/my-feature/02-core",
+            dependsOn: ["props"],
+          },
+        },
       },
     }
   }
