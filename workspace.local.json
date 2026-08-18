@@ -1,3 +1,38 @@
 {
-  "$comment": "Your personal workspace layer. Deep-merged over workspace.json, and it wins. Versioned on an orphan branch pushed only to your fork — never to the shared repo's main. Put anything here whose value differs between developers."
+  "$comment": "Your personal workspace layer. Deep-merged over workspace.json, and it wins. Versioned on an orphan branch pushed only to your fork — never to the shared repo's main. Put anything here whose value differs between developers.",
+
+  "defaultForkEffort": "jscad-body-coverage",
+  "forkEfforts": {
+    "jscad-body-coverage": {
+      "description": "3D body coverage in jscad-electronics: make getJscadModelForFootprint return a solid for every footprint that should have one, so a part's physical envelope is measurable from its footprint alone (core's measureFootprinterBody -> create-fdm-enclosure clearance checks). Plan: JSCAD-ELECTRONICS-BODY-COVERAGE.md in the workspace root.",
+      "defaultBranch": "feat/footprint-body-coverage",
+      "branchOverrides": {},
+      "repos": ["jscad-electronics"],
+      "$consumers": "Only jscad-electronics carries the patch. core, circuit-json-to-gltf and 3d-viewer consume the bodies and are rebuilt from workspace.json's bundling graph (`./tsc-dev rebuild --from jscad-electronics`), not patched here."
+    }
+  },
+
+  "defaultMergeStack": "jscad-body-coverage",
+  "mergeStacks": {
+    "jscad-body-coverage": {
+      "description": "Two same-repo layers, split so the evidence can be reviewed before the fix: `audit` records the gap and renders every missing body, `bodies` fills them in and re-renders the same views. Reviewing them together would show only the finished pictures, and the point of the first layer is that today's pictures are empty.",
+      "upstreamOwner": "tscircuit",
+      "layers": {
+        "audit": {
+          "repo": "jscad-electronics",
+          "sourceBranch": "feat/footprint-body-coverage-audit",
+          "base": "main",
+          "title": "Record the 3D body-coverage gap: a ledger, and a render of every missing body",
+          "body": "`getJscadModelForFootprint` accepts every footprinter name, builds whatever `lib/Footprinter3d.tsx` has a `case` for, and returns **cleanly with `geometries: []`** for the rest. Nothing throws, so a missing body is invisible at the point of use.\n\nIt stops being invisible as soon as something *measures* the result: `core`'s `measureFootprinterBody` feeds `create-fdm-enclosure`, which cannot tell whether a screw boss runs through a part that has no height. It reports `component_bounds_unknown` rather than guessing — so the gap is safe, but the clearance check simply does not run. The names affected are not a random tail: the SOT and TO families, electrolytics, potentiometers, switches and connectors, which are the tall parts an enclosure exists to clear.\n\n**This PR fixes none of them.** It makes them reviewable:\n\n- `tests/body-coverage/footprint-probes.ts` — the ledger. `NO_BODY` (copper features, where empty is the right answer), `PROBE` (names footprinter will not parse without a pin count), `MISSING_BODIES` (35 gaps, with a reason each).\n- `tests/body-coverage/registry-coverage.test.ts` — walks footprinter's **own registry**, so it cannot drift as footprints are added, and puts every name in exactly one bucket. It fails in both directions, including on a gap that has been closed but left in the ledger.\n- one poppygl snapshot per gap, rendered through `dist/vanilla.js` (the entry consumers use, not the React path) from the same camera the existing snapshot tests use. **Every one of them is bare copper pads on a grid.** When the bodies land, the same cameras show the parts, and the diff of these PNGs is the evidence.\n\nAlso here because nothing could be rendered without it: `FootprintPad` threw on polygon pads (SOT-89's tab), so that footprint could not be drawn with its pads at all, and the error named the shape rather than the footprint. Polygons now extrude through `Polygon` + `ExtrudeLinear`, both of which the vanilla renderer already implements.\n\nA probe footprinter rejects is reported separately from a body that is missing — 8 names used to look like failures for that reason alone."
+        },
+        "bodies": {
+          "repo": "jscad-electronics",
+          "sourceBranch": "feat/footprint-body-coverage",
+          "baseLayer": "audit",
+          "title": "Add the missing 3D bodies: 32 of the 35 recorded gaps",
+          "body": "Fills in the gaps recorded by the base PR, and re-renders **the same snapshots from the same cameras**. Where they showed bare copper pads they now show the part; that diff is the review. The ledger goes from 35 entries to 3.\n\nMost of this is dispatch, not geometry. `lib/Footprinter3d.tsx` switches on footprinter's `fn` and simply had no arm for these names, while a suitable body sat in `lib/` unreferenced — `SOT-563.tsx` and `BGA.tsx` had never been reachable at all, SC-70-4 shares SC-70-6's body, SOP and SSOP are SOIC with a different lead span, SON/WSON/VSON are DFNs, MLP and QUAD are QFNs.\n\nParameterised rather than aliased wherever the outline genuinely differs, since an alias reports a body that is not there:\n\n- `SOT-223` takes its dimensions, so SOT-89 can use it at a third of the volume\n- `TO-220` takes `mouldedTab`, because TO-220F encapsulates the tab\n- LGA/MLP/QUAD read `w`/`h`, **not** `grid`: for those `grid` is a pad COUNT per side (`lga14` is 4x3 pads), so reading it as millimetres gave a 4 x 3 body for a part that is 2.4 x 2.9. Only `vson` states its outline as a grid.\n\nFour new bodies, for parts nothing in the repo resembled: `DPAK` (TO-252 and TO-263 — a moulded body on an exposed tab, placed over the TAB pad because the footprint is asymmetric), `ElectrolyticCapacitor` (radial can; diameter from `d` or from the name, height derived and deliberately generous), `Potentiometer`, and `SmdPushButton` (whose actuator height is a separate prop, because that is what a lid has to clear).\n\n`TO-92` is fixed separately in its own commit: it was translated 10.5mm up with 15mm leads, so a 4.5mm part measured 19.5mm end to end and floated above the board in every render.\n\n`tests/body-coverage/body-envelope.test.ts` is the assertion the pictures cannot make — the height above the board, per package, against the datasheet outline. It also records the two placements known to be wrong (`to220` at 32.5mm, `breakoutheaders`' headers hanging below the board) with the values they measure, so fixing either fails the test and prompts the note to be deleted.\n\nStill open, with reasons in the ledger: `jst` (only the ZH series has a body), `m2host` (footprinter reports no dimensions at all for it), `usbcmidmount` (`USB-C.tsx` draws with `Ellipsoid` and with `rotation` props on primitives; `lib/vanilla` implements neither and ignores the second SILENTLY rather than rejecting it, so reusing it would render the wrong shape)."
+        }
+      }
+    }
+  }
 }
