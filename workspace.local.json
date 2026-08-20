@@ -3,8 +3,8 @@
   "defaultForkEffort": "jscad-body-coverage",
   "forkEfforts": {
     "jscad-body-coverage": {
-      "description": "3D body coverage in jscad-electronics: make getJscadModelForFootprint return a solid for every footprint that should have one, so a part's physical envelope is measurable from its footprint alone (core's measureFootprinterBody -> create-fdm-enclosure clearance checks). Plan: JSCAD-ELECTRONICS-BODY-COVERAGE.md in the workspace root.",
-      "defaultBranch": "feat/footprint-body-coverage",
+      "description": "3D body coverage in jscad-electronics: make getJscadModelForFootprint return a solid for every footprint that should have one, so a part's physical envelope is measurable from its footprint alone (core's measureFootprinterBody -> create-fdm-enclosure clearance checks). #330 (the ledger and a render of every missing body) and #331 (32 bodies) are merged; feat/pinrow-top-mount is #333, which corrects which way up a through-hole pin header is mounted. Plan: JSCAD-ELECTRONICS-BODY-COVERAGE.md in the workspace root.",
+      "defaultBranch": "feat/pinrow-top-mount",
       "branchOverrides": {},
       "repos": [
         "jscad-electronics"
