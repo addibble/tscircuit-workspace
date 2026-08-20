@@ -15,7 +15,7 @@
   "defaultMergeStack": "pin-header-semantics",
   "mergeStacks": {
     "pin-header-semantics": {
-      "description": "One decision spread across three repos: which side of the board a part is on is `layer`, `invert` means the part is installed backwards, and `faceup` is dead. No layer here bases on another — a Git base has to live in the same repository, and these are three — so they are siblings that should be read together and can merge in any order.",
+      "description": "One decision spread across three repos: which side of the board a part is on is `layer`, `invert` means the part is installed backwards, and `faceup` is dead. props#805 (the connectsFromAbove/connectsFromBelow aliases) is merged; the two remaining layers are siblings — a Git base has to live in the same repository, so nothing here bases on anything else — and can merge in either order.",
       "upstreamOwner": "tscircuit",
       "layers": {
         "flags": {
@@ -31,13 +31,6 @@
           "upstreamBranch": "stack/jscad-body-coverage/headers",
           "base": "main",
           "title": "Mount through-hole pin headers on top of the board, not under it"
-        },
-        "alias": {
-          "repo": "props",
-          "sourceBranch": "feat/connects-from-above-below",
-          "upstreamBranch": "feat/connects-from-above-below",
-          "base": "main",
-          "title": "Add connectsFromAbove / connectsFromBelow to pinHeaderProps"
         }
       }
     }
