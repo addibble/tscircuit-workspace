@@ -12,18 +12,32 @@
       "$consumers": "Only jscad-electronics carries the patch. core, circuit-json-to-gltf and 3d-viewer consume the bodies and are rebuilt from workspace.json's bundling graph (`./tsc-dev rebuild --from jscad-electronics`), not patched here."
     }
   },
-  "defaultMergeStack": "jscad-body-coverage",
+  "defaultMergeStack": "pin-header-semantics",
   "mergeStacks": {
-    "jscad-body-coverage": {
-      "description": "One remaining layer. The `audit` layer (#330, the ledger and a render of every missing body) and the `bodies` layer (#331, the 32 bodies) are both merged; `headers` corrects which way up a through-hole pin header is mounted, kept separate because it changes the meaning of `invert` for existing consumers.",
+    "pin-header-semantics": {
+      "description": "One decision spread across three repos: which side of the board a part is on is `layer`, `invert` means the part is installed backwards, and `faceup` is dead. No layer here bases on another — a Git base has to live in the same repository, and these are three — so they are siblings that should be read together and can merge in any order.",
       "upstreamOwner": "tscircuit",
       "layers": {
-        "headers": {
+        "flags": {
+          "repo": "footprinter",
+          "sourceBranch": "fix/clarify-pinrow-orientation-flags",
+          "upstreamBranch": "fix/clarify-pinrow-orientation-flags",
+          "base": "main",
+          "title": "Say what `invert` and `faceup` mean, and deprecate `faceup`"
+        },
+        "renderer": {
           "repo": "jscad-electronics",
           "sourceBranch": "feat/pinrow-top-mount",
-          "title": "Mount through-hole pin headers on top of the board, not under it",
-          "body": "A plain `pinrow` rendered upside down: the plastic body sat at z -3.6 to -1.6, hanging beneath the board with 2mm of pin poking up through the holes — a BOTTOM-mounted header — while `invert` produced the ordinary top-mounted one. The default and the flag were the wrong way round.\n\nVisible in the renders (the holes met the pins at the TOP of the body rather than at its base) and worse in the numbers: the part measured **0.9mm** above the board where a 2.54mm header stands about **8.5mm**. An enclosure sized from that leaves no room for the header at all — the same class of defect as a missing body, and a worse one, because a confidently wrong height reports no `component_bounds_unknown` for anything to fall back on.\n\n`invert` now means what it says: mounted on the underside. `faceup` and the SMD and right-angle variants are unchanged.\n\nSeparate from the body work because it changes existing renders — `pinrow6`, `pinrow6-invert`, `pinrow6-faceup`, `pinrow8_rows2`, `pinRow-smd-rightangle` — and changes what `invert` means for anything that passes it. `breakoutheaders` leaves the known-bad list in `body-envelope.test.ts` as a result.",
-          "base": "main"
+          "upstreamBranch": "stack/jscad-body-coverage/headers",
+          "base": "main",
+          "title": "Mount through-hole pin headers on top of the board, not under it"
+        },
+        "alias": {
+          "repo": "props",
+          "sourceBranch": "feat/connects-from-above-below",
+          "upstreamBranch": "feat/connects-from-above-below",
+          "base": "main",
+          "title": "Add connectsFromAbove / connectsFromBelow to pinHeaderProps"
         }
       }
     }
