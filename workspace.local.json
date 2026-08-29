@@ -1,36 +1,48 @@
 {
   "$comment": "Your personal workspace layer. Deep-merged over workspace.json, and it wins. Versioned on an orphan branch pushed only to your fork — never to the shared repo's main. Put anything here whose value differs between developers.",
-  "defaultForkEffort": "jscad-body-coverage",
+  "defaultForkEffort": "enclosure-mounting-hardware",
   "forkEfforts": {
-    "jscad-body-coverage": {
-      "description": "3D body coverage in jscad-electronics: make getJscadModelForFootprint return a solid for every footprint that should have one, so a part's physical envelope is measurable from its footprint alone (core's measureFootprinterBody -> create-fdm-enclosure clearance checks). #330 (the ledger and a render of every missing body) and #331 (32 bodies) are merged; feat/pinrow-top-mount is #333, which corrects which way up a through-hole pin header is mounted. Plan: JSCAD-ELECTRONICS-BODY-COVERAGE.md in the workspace root.",
-      "defaultBranch": "feat/pinrow-top-mount",
+    "enclosure-mounting-hardware": {
+      "description": "Enclosure mounting hardware, per rfc/rfcs/2026-08-14-enclosure-mounting-hardware.md (merged as rfc#17, then narrowed by Seve). Adds <enclosure.fdm.heatsetinsert>, <assembly.bolt|screw|screen|cable>, removes <enclosure.screwboss> and the <hole selfTapping> prop. The load-bearing idea: the fastening method is carried by WHICH ELEMENT IS PRESENT, not by a flag -- a screw threads into the plastic, a bolt threads into an insert -- so no prop can contradict the hardware, and the bore that gets cut (self-tap pilot vs insert install diameter) follows from the element. props and core are done and green; the whole remainder is create-fdm-enclosure, whose branch is cut but empty.",
+      "defaultBranch": "agent/assembly-extensions",
       "branchOverrides": {},
       "repos": [
-        "jscad-electronics"
+        "props",
+        "core",
+        "create-fdm-enclosure"
       ],
-      "$consumers": "Only jscad-electronics carries the patch. core, circuit-json-to-gltf and 3d-viewer consume the bodies and are rebuilt from workspace.json's bundling graph (`./tsc-dev rebuild --from jscad-electronics`), not patched here."
+      "$order": "props must land before core: core's components import assemblyScrewProps and the fastenerGeometry helpers. create-fdm-enclosure consumes both.",
+      "$remaining": "In create-fdm-enclosure: (1) EnclosureMountInput gains threadEngagement, pilotDiameter, bottomClearance, boreEntryChamfer; (2) getRequiredEngagementMm honours the authored value, default 2.5x nominal, up from a hardcoded 2x; (3) getMountBoreDiameterMm honours the authored pilot, default 0.8x nominal, replacing the per-thread catalogue constant; (4) getMountBossDiameterMm calls props' getBossOuterDiameterMm, one max() instead of a branch per fastening; (5) insertMeltReliefMm and selfTapPilotReliefMm are DELETED, both call sites reading the converged bottomClearance; (6) a 45-degree chamfer cone subtracted at the bore mouth. Expect the enclosure fixtures to need rewriting: an M3 self-tapping mount goes from 6+1mm of boss depth to 7.5+3mm, so existing standoffs stop fitting.",
+      "$deferred": "Boss support: whether a boss is merged into a side wall (enough support) or freestanding (needs gussets or ribs). Deliberately out of scope -- a boss today has no knowledge of walls at all, so this needs new geometry and its own design pass.",
+      "$consumers": "3d-viewer, circuit-json-to-gltf and modelprinter render the hardware and are NOT patched here; that is the next phase. They are rebuilt from workspace.json's bundling graph (`./tsc-dev rebuild --from core`)."
     }
   },
-  "defaultMergeStack": "pin-header-semantics",
+  "defaultMergeStack": "enclosure-mounting-hardware",
   "mergeStacks": {
-    "pin-header-semantics": {
-      "description": "One decision spread across three repos: which side of the board a part is on is `layer`, `invert` means the part is installed backwards, and `faceup` is dead. props#805 (the connectsFromAbove/connectsFromBelow aliases) is merged; the two remaining layers are siblings — a Git base has to live in the same repository, so nothing here bases on anything else — and can merge in either order.",
+    "enclosure-mounting-hardware": {
+      "description": "Three sibling layers -- a Git base has to live in the same repository, so none bases on another -- but they must MERGE in order: props, then core, then create-fdm-enclosure. Not ready to publish: the solver layer is an empty branch.",
       "upstreamOwner": "tscircuit",
       "layers": {
-        "flags": {
-          "repo": "footprinter",
-          "sourceBranch": "fix/clarify-pinrow-orientation-flags",
-          "upstreamBranch": "fix/clarify-pinrow-orientation-flags",
+        "props": {
+          "repo": "props",
+          "sourceBranch": "agent/assembly-extensions",
+          "upstreamBranch": "stack/enclosure-mounting-hardware/props",
           "base": "main",
-          "title": "Say what `invert` and `faceup` mean, and deprecate `faceup`"
+          "title": "Assembly mounting hardware: bolts, screws, heat-set inserts, screens and cables"
         },
-        "renderer": {
-          "repo": "jscad-electronics",
-          "sourceBranch": "feat/pinrow-top-mount",
-          "upstreamBranch": "stack/jscad-body-coverage/headers",
+        "core": {
+          "repo": "core",
+          "sourceBranch": "agent/assembly-extensions",
+          "upstreamBranch": "stack/enclosure-mounting-hardware/core",
           "base": "main",
-          "title": "Mount through-hole pin headers on top of the board, not under it"
+          "title": "Render the assembly mounting hardware elements, and join mounts per hole"
+        },
+        "solver": {
+          "repo": "create-fdm-enclosure",
+          "sourceBranch": "agent/assembly-extensions",
+          "upstreamBranch": "stack/enclosure-mounting-hardware/solver",
+          "base": "main",
+          "title": "Authorable thread-forming geometry, and one boss-diameter derivation"
         }
       }
     }
