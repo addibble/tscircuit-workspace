@@ -11,40 +11,10 @@
         "core",
         "create-fdm-enclosure"
       ],
-      "$order": "props must land before core: core's components import assemblyScrewProps and the fastenerGeometry helpers. create-fdm-enclosure consumes both.",
+      "$order": "props builds first and core links it: core imports assemblyScrewProps and the fastenerGeometry helpers, so a core build against an unpublished props fails. `./tsc-dev publish props && ./tsc-dev link core props`. Same order applies whenever these do go upstream.",
       "$remaining": "In create-fdm-enclosure: (1) EnclosureMountInput gains threadEngagement, pilotDiameter, bottomClearance, boreEntryChamfer; (2) getRequiredEngagementMm honours the authored value, default 2.5x nominal, up from a hardcoded 2x; (3) getMountBoreDiameterMm honours the authored pilot, default 0.8x nominal, replacing the per-thread catalogue constant; (4) getMountBossDiameterMm calls props' getBossOuterDiameterMm, one max() instead of a branch per fastening; (5) insertMeltReliefMm and selfTapPilotReliefMm are DELETED, both call sites reading the converged bottomClearance; (6) a 45-degree chamfer cone subtracted at the bore mouth. Expect the enclosure fixtures to need rewriting: an M3 self-tapping mount goes from 6+1mm of boss depth to 7.5+3mm, so existing standoffs stop fitting.",
       "$deferred": "Boss support: whether a boss is merged into a side wall (enough support) or freestanding (needs gussets or ribs). Deliberately out of scope -- a boss today has no knowledge of walls at all, so this needs new geometry and its own design pass.",
       "$consumers": "3d-viewer, circuit-json-to-gltf and modelprinter render the hardware and are NOT patched here; that is the next phase. They are rebuilt from workspace.json's bundling graph (`./tsc-dev rebuild --from core`)."
-    }
-  },
-  "defaultMergeStack": "enclosure-mounting-hardware",
-  "mergeStacks": {
-    "enclosure-mounting-hardware": {
-      "description": "Three sibling layers -- a Git base has to live in the same repository, so none bases on another -- but they must MERGE in order: props, then core, then create-fdm-enclosure. Not ready to publish: the solver layer is an empty branch.",
-      "upstreamOwner": "tscircuit",
-      "layers": {
-        "props": {
-          "repo": "props",
-          "sourceBranch": "agent/assembly-extensions",
-          "upstreamBranch": "stack/enclosure-mounting-hardware/props",
-          "base": "main",
-          "title": "Assembly mounting hardware: bolts, screws, heat-set inserts, screens and cables"
-        },
-        "core": {
-          "repo": "core",
-          "sourceBranch": "agent/assembly-extensions",
-          "upstreamBranch": "stack/enclosure-mounting-hardware/core",
-          "base": "main",
-          "title": "Render the assembly mounting hardware elements, and join mounts per hole"
-        },
-        "solver": {
-          "repo": "create-fdm-enclosure",
-          "sourceBranch": "agent/assembly-extensions",
-          "upstreamBranch": "stack/enclosure-mounting-hardware/solver",
-          "base": "main",
-          "title": "Authorable thread-forming geometry, and one boss-diameter derivation"
-        }
-      }
     }
   }
 }
